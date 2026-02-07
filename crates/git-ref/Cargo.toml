@@ -1,0 +1,17 @@
+[package]
+name = "git-ref"
+description = "Reference system for the gitr git implementation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+git-utils = { workspace = true }
+git-hash = { workspace = true }
+bstr = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -1,0 +1,24 @@
+[package]
+name = "git-protocol"
+description = "Git wire protocol implementation (pkt-line, fetch, push, v1/v2)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+git-utils = { workspace = true }
+git-hash = { workspace = true }
+git-object = { workspace = true }
+git-pack = { workspace = true }
+git-odb = { workspace = true }
+git-ref = { workspace = true }
+git-config = { workspace = true }
+git-repository = { workspace = true }
+git-transport = { workspace = true }
+bstr = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

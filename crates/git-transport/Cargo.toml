@@ -1,0 +1,17 @@
+[package]
+name = "git-transport"
+description = "Transport abstraction for git wire protocol (SSH, HTTP, local)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+git-utils = { workspace = true }
+git-hash = { workspace = true }
+thiserror = { workspace = true }
+bstr = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

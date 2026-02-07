@@ -1,0 +1,98 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/git-utils",
+    "crates/git-hash",
+    "crates/git-object",
+    "crates/git-loose",
+    "crates/git-pack",
+    "crates/git-odb",
+    "crates/git-index",
+    "crates/git-ref",
+    "crates/git-config",
+    "crates/git-repository",
+    "crates/git-diff",
+    "crates/git-merge",
+    "crates/git-revwalk",
+    "crates/git-transport",
+    "crates/git-protocol",
+    "crates/git-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+repository = "https://github.com/cNameHitch/gitr"
+
+[workspace.dependencies]
+# Byte string handling (git paths are not always UTF-8)
+bstr = "1"
+
+# Hashing
+sha1 = "0.10"
+sha1-checked = "0.10"
+sha2 = "0.10"
+digest = "0.10"
+
+# Compression (zlib for loose objects and packfiles)
+flate2 = "1"
+
+# Memory-mapped I/O (packfile access)
+memmap2 = "0.9"
+
+# CRC32 (pack index validation)
+crc32fast = "1"
+
+# Caching
+lru = "0.12"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Regex (for git grep)
+regex = "1"
+
+# CLI framework
+clap = { version = "4", features = ["derive"] }
+
+# Serialization (for config, not git object formats)
+serde = { version = "1", features = ["derive"] }
+
+# Testing
+tempfile = "3"
+proptest = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Concurrency
+crossbeam = "0.8"
+rayon = "1"
+
+# Async (transport layer only)
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["stream"] }
+
+# Internal crates
+git-utils = { path = "crates/git-utils" }
+git-hash = { path = "crates/git-hash" }
+git-object = { path = "crates/git-object" }
+git-loose = { path = "crates/git-loose" }
+git-pack = { path = "crates/git-pack" }
+git-odb = { path = "crates/git-odb" }
+git-index = { path = "crates/git-index" }
+git-ref = { path = "crates/git-ref" }
+git-config = { path = "crates/git-config" }
+git-repository = { path = "crates/git-repository" }
+git-diff = { path = "crates/git-diff" }
+git-merge = { path = "crates/git-merge" }
+git-revwalk = { path = "crates/git-revwalk" }
+git-transport = { path = "crates/git-transport" }
+git-protocol = { path = "crates/git-protocol" }
+git-cli = { path = "crates/git-cli" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

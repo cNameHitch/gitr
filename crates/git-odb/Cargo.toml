@@ -1,0 +1,19 @@
+[package]
+name = "git-odb"
+description = "Unified object database: read/write objects across loose, packed, and alternate storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+git-utils = { workspace = true }
+git-hash = { workspace = true }
+git-object = { workspace = true }
+git-loose = { workspace = true }
+git-pack = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

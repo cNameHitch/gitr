@@ -1,0 +1,29 @@
+[package]
+name = "git-pack"
+description = "Packfile reading, writing, delta encoding, index lookup, MIDX, and bitmap support"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+git-utils = { workspace = true }
+git-hash = { workspace = true }
+git-object = { workspace = true }
+flate2 = { workspace = true }
+memmap2 = { workspace = true }
+crc32fast = "1"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "pack_read_bench"
+harness = false
+
+[[bench]]
+name = "delta_bench"
+harness = false

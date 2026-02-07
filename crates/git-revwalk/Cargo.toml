@@ -1,0 +1,22 @@
+[package]
+name = "git-revwalk"
+description = "Revision walking: commit traversal, merge-base, commit-graph, pretty-print, object listing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+git-utils = { workspace = true }
+git-hash = { workspace = true }
+git-object = { workspace = true }
+git-odb = { workspace = true }
+git-ref = { workspace = true }
+git-repository = { workspace = true }
+bstr = { workspace = true }
+thiserror = { workspace = true }
+memmap2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

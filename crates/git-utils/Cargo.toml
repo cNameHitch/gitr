@@ -1,0 +1,27 @@
+[package]
+name = "git-utils"
+description = "Foundation utilities for the gitr git implementation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bstr = { workspace = true }
+thiserror = { workspace = true }
+clap = { workspace = true }
+chrono = "0.4"
+bitflags = "2"
+tempfile = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+proptest = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "path_bench"
+harness = false

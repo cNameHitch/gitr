@@ -1,0 +1,36 @@
+[package]
+name = "git-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "gitr"
+path = "src/main.rs"
+
+[dependencies]
+git-utils = { workspace = true }
+git-hash = { workspace = true }
+git-object = { workspace = true }
+git-loose = { workspace = true }
+git-pack = { workspace = true }
+git-odb = { workspace = true }
+git-index = { workspace = true }
+git-ref = { workspace = true }
+git-config = { workspace = true }
+git-repository = { workspace = true }
+git-revwalk = { workspace = true }
+git-diff = { workspace = true }
+git-merge = { workspace = true }
+git-transport = { workspace = true }
+git-protocol = { workspace = true }
+
+clap = { workspace = true }
+anyhow = { workspace = true }
+bstr = { workspace = true }
+flate2 = { workspace = true }
+regex = { workspace = true }
+tempfile = { workspace = true }
+crc32fast = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

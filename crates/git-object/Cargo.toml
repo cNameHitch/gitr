@@ -1,0 +1,23 @@
+[package]
+name = "git-object"
+description = "Git object model: blob, tree, commit, tag parsing and serialization"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+git-utils = { workspace = true }
+git-hash = { workspace = true }
+bstr = { workspace = true }
+thiserror = { workspace = true }
+lru = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "parse_bench"
+harness = false

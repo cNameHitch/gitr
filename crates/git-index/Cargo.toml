@@ -1,0 +1,19 @@
+[package]
+name = "git-index"
+description = "Index (staging area) reading, writing, and manipulation for the gitr git implementation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+git-utils = { workspace = true }
+git-hash = { workspace = true }
+git-object = { workspace = true }
+git-odb = { workspace = true }
+bstr = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

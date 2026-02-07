@@ -1,0 +1,23 @@
+[package]
+name = "git-hash"
+description = "Hash computation and object identity for the gitr git implementation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sha1 = { workspace = true }
+sha1-checked = { workspace = true }
+sha2 = { workspace = true }
+digest = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "hash_bench"
+harness = false
