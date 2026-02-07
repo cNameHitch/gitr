@@ -1,0 +1,113 @@
+name: Experimental Release
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-13
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../gitr-${{ matrix.target }}.tar.gz gitr
+
+      - name: Package (windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path target/${{ matrix.target }}/release/gitr.exe -DestinationPath gitr-${{ matrix.target }}.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitr-${{ matrix.target }}
+          path: gitr-${{ matrix.target }}.*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create experimental release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          TAG="v0.0.0-experimental.pr${PR_NUMBER}"
+
+          # Clean up previous experimental release for this PR
+          gh release delete "$TAG" --yes 2>/dev/null || true
+          git push origin ":refs/tags/${TAG}" 2>/dev/null || true
+
+          # Create new prerelease tagged at the PR head
+          gh release create "$TAG" \
+            --target "$HEAD_SHA" \
+            --prerelease \
+            --title "Experimental: PR #${PR_NUMBER}" \
+            --notes "Experimental build from PR #${PR_NUMBER} (commit ${HEAD_SHA::7}).
+
+          Install with:
+          \`\`\`
+          # Linux x86_64
+          curl -L https://github.com/${{ github.repository }}/releases/download/${TAG}/gitr-x86_64-unknown-linux-gnu.tar.gz | tar xz
+
+          # macOS Apple Silicon
+          curl -L https://github.com/${{ github.repository }}/releases/download/${TAG}/gitr-aarch64-apple-darwin.tar.gz | tar xz
+          \`\`\`" \
+            gitr-*.tar.gz gitr-*.zip
