@@ -459,6 +459,7 @@ dependencies = [
  "bstr",
  "clap",
  "crc32fast",
+ "criterion",
  "flate2",
  "git-config",
  "git-diff",
