@@ -110,9 +110,6 @@ pub fn connect_with_config(
             c.arg("-p").arg(port.to_string());
         }
 
-        // Request protocol v2 if supported
-        c.arg("-o").arg("SendEnv=GIT_PROTOCOL");
-
         if let Some(ref user) = url.user {
             c.arg(format!("{}@{}", user, host));
         } else {
@@ -123,9 +120,6 @@ pub fn connect_with_config(
         c.arg(&url.path);
         c
     };
-
-    // Set GIT_PROTOCOL env for v2 negotiation
-    cmd.env("GIT_PROTOCOL", "version=2");
 
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
