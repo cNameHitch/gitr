@@ -183,11 +183,9 @@ pub fn setup_repo(dir: &Path, size: RepoSize) {
 
     // Create tags on every 10th commit (or fewer for small repos)
     let tag_interval = if commits >= 20 { 10 } else { std::cmp::max(1, commits / 2) };
-    let mut tag_count = 0;
-    for i in (0..commits).step_by(tag_interval) {
+    for (tag_count, i) in (0..commits).step_by(tag_interval).enumerate() {
         let rev = format!("HEAD~{}", commits.saturating_sub(1) - i);
         git_setup(dir, &["tag", &format!("v0.{}", tag_count), &rev]);
-        tag_count += 1;
     }
 }
 
