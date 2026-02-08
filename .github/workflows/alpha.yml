@@ -25,6 +25,7 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+          token: ${{ secrets.RELEASE_TOKEN }}
 
       - name: Calculate next alpha version
         id: calc
