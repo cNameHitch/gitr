@@ -6,7 +6,7 @@
 
 Byte-compatible drop-in replacement for C Git, built with Rust's safety guarantees.
 
-[![Tests](https://github.com/cNameHitch/gitr/actions/workflows/test.yml/badge.svg)](https://github.com/cNameHitch/gitr/actions/workflows/test.yml)
+[![CI](https://github.com/cNameHitch/gitr/actions/workflows/ci.yml/badge.svg)](https://github.com/cNameHitch/gitr/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
 
