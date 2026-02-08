@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "git-cli"
-version = "0.1.1-alpha.3"
+version = "0.1.1-alpha.8"
 dependencies = [
  "anyhow",
  "bstr",
@@ -482,7 +482,7 @@ dependencies = [
 
 [[package]]
 name = "git-config"
-version = "0.1.1-alpha.3"
+version = "0.1.1-alpha.8"
 dependencies = [
  "bstr",
  "criterion",
@@ -493,7 +493,7 @@ dependencies = [
 
 [[package]]
 name = "git-diff"
-version = "0.1.1-alpha.3"
+version = "0.1.1-alpha.8"
 dependencies = [
  "bstr",
  "git-hash",
@@ -508,7 +508,7 @@ dependencies = [
 
 [[package]]
 name = "git-hash"
-version = "0.1.1-alpha.3"
+version = "0.1.1-alpha.8"
 dependencies = [
  "criterion",
  "digest",
@@ -521,7 +521,7 @@ dependencies = [
 
 [[package]]
 name = "git-index"
-version = "0.1.1-alpha.3"
+version = "0.1.1-alpha.8"
 dependencies = [
  "bstr",
  "git-hash",
@@ -534,7 +534,7 @@ dependencies = [
 
 [[package]]
 name = "git-loose"
-version = "0.1.1-alpha.3"
+version = "0.1.1-alpha.8"
 dependencies = [
  "criterion",
  "flate2",
@@ -547,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "git-merge"
-version = "0.1.1-alpha.3"
+version = "0.1.1-alpha.8"
 dependencies = [
  "bstr",
  "git-diff",
@@ -563,7 +563,7 @@ dependencies = [
 
 [[package]]
 name = "git-object"
-version = "0.1.1-alpha.3"
+version = "0.1.1-alpha.8"
 dependencies = [
  "bstr",
  "criterion",
@@ -576,7 +576,7 @@ dependencies = [
 
 [[package]]
 name = "git-odb"
-version = "0.1.1-alpha.3"
+version = "0.1.1-alpha.8"
 dependencies = [
  "git-hash",
  "git-loose",
@@ -589,7 +589,7 @@ dependencies = [
 
 [[package]]
 name = "git-pack"
-version = "0.1.1-alpha.3"
+version = "0.1.1-alpha.8"
 dependencies = [
  "crc32fast",
  "criterion",
@@ -604,7 +604,7 @@ dependencies = [
 
 [[package]]
 name = "git-protocol"
-version = "0.1.1-alpha.3"
+version = "0.1.1-alpha.8"
 dependencies = [
  "bstr",
  "git-config",
@@ -622,7 +622,7 @@ dependencies = [
 
 [[package]]
 name = "git-ref"
-version = "0.1.1-alpha.3"
+version = "0.1.1-alpha.8"
 dependencies = [
  "bstr",
  "git-hash",
@@ -633,7 +633,7 @@ dependencies = [
 
 [[package]]
 name = "git-repository"
-version = "0.1.1-alpha.3"
+version = "0.1.1-alpha.8"
 dependencies = [
  "git-config",
  "git-hash",
@@ -647,7 +647,7 @@ dependencies = [
 
 [[package]]
 name = "git-revwalk"
-version = "0.1.1-alpha.3"
+version = "0.1.1-alpha.8"
 dependencies = [
  "bstr",
  "git-hash",
@@ -663,7 +663,7 @@ dependencies = [
 
 [[package]]
 name = "git-transport"
-version = "0.1.1-alpha.3"
+version = "0.1.1-alpha.8"
 dependencies = [
  "bstr",
  "git-hash",
@@ -674,7 +674,7 @@ dependencies = [
 
 [[package]]
 name = "git-utils"
-version = "0.1.1-alpha.3"
+version = "0.1.1-alpha.8"
 dependencies = [
  "bitflags",
  "bstr",
