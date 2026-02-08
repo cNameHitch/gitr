@@ -54,7 +54,7 @@ fn bench_typed_bool(c: &mut Criterion) {
     c.bench_function("parse_bool", |b| {
         b.iter(|| {
             let val = git_config::parse_bool(Some(black_box(BStr::new("true"))));
-            black_box(val);
+            let _ = black_box(val);
         });
     });
 }
@@ -63,7 +63,7 @@ fn bench_typed_int(c: &mut Criterion) {
     c.bench_function("parse_int_with_suffix", |b| {
         b.iter(|| {
             let val = git_config::parse_int(black_box(BStr::new("512m")));
-            black_box(val);
+            let _ = black_box(val);
         });
     });
 }
@@ -85,7 +85,7 @@ fn bench_config_set_lookup(c: &mut Criterion) {
     c.bench_function("config_set_get_string", |b| {
         b.iter(|| {
             let val = set.get_string(black_box("user.name"));
-            black_box(val);
+            let _ = black_box(val);
         });
     });
 }

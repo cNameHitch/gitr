@@ -1,0 +1,209 @@
+name: Promote Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Source version to promote (e.g. 0.2.0-alpha.4 or 0.2.0-beta.2)"
+        required: true
+        type: string
+      target_stage:
+        description: "Target stage"
+        required: true
+        type: choice
+        options:
+          - beta
+          - stable
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.calc.outputs.version }}
+      is_stable: ${{ steps.calc.outputs.is_stable }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Validate and calculate promoted version
+        id: calc
+        run: |
+          SOURCE="v${{ inputs.version }}"
+          TARGET="${{ inputs.target_stage }}"
+
+          # Verify source tag exists
+          if ! git rev-parse "$SOURCE" >/dev/null 2>&1; then
+            echo "::error::Source tag $SOURCE does not exist"
+            exit 1
+          fi
+
+          # Determine source stage
+          if echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$'; then
+            SOURCE_STAGE="alpha"
+          elif echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$'; then
+            SOURCE_STAGE="beta"
+          else
+            echo "::error::Source version must be an alpha or beta prerelease (e.g. 0.2.0-alpha.1)"
+            exit 1
+          fi
+
+          # Validate promotion path
+          if [ "$SOURCE_STAGE" = "alpha" ] && [ "$TARGET" != "beta" ]; then
+            echo "::error::Alpha releases can only be promoted to beta"
+            exit 1
+          fi
+          if [ "$SOURCE_STAGE" = "beta" ] && [ "$TARGET" != "stable" ]; then
+            echo "::error::Beta releases can only be promoted to stable"
+            exit 1
+          fi
+
+          # Extract base version (without prerelease suffix)
+          BASE=$(echo "${{ inputs.version }}" | sed 's/-.*//')
+
+          # Calculate new version
+          if [ "$TARGET" = "beta" ]; then
+            HIGHEST_BETA=$(git tag --list "v${BASE}-beta.*" --sort=-v:refname \
+              | head -n1 || true)
+
+            if [ -z "$HIGHEST_BETA" ]; then
+              BETA_NUM=1
+            else
+              BETA_NUM=$(echo "$HIGHEST_BETA" | sed 's/.*-beta\.//')
+              BETA_NUM=$((BETA_NUM + 1))
+            fi
+
+            NEW_VERSION="${BASE}-beta.${BETA_NUM}"
+            echo "is_stable=false" >> "$GITHUB_OUTPUT"
+          else
+            NEW_VERSION="${BASE}"
+            echo "is_stable=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Promoting ${{ inputs.version }} -> ${NEW_VERSION}"
+
+      - name: Bump Cargo.toml version
+        run: |
+          sed -i 's/^version = ".*"/version = "${{ steps.calc.outputs.version }}"/' Cargo.toml
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Update Cargo.lock
+        run: cargo generate-lockfile
+
+      - name: Commit and tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "[release] v${{ steps.calc.outputs.version }}"
+          git tag "v${{ steps.calc.outputs.version }}"
+          git push origin main --tags
+
+  build:
+    needs: promote
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-13
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.promote.outputs.version }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../gitr-v${{ needs.promote.outputs.version }}-${{ matrix.target }}.tar.gz gitr
+
+      - name: Package (windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $version = "${{ needs.promote.outputs.version }}"
+          $target = "${{ matrix.target }}"
+          Compress-Archive -Path "target/$target/release/gitr.exe" -DestinationPath "gitr-v$version-$target.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitr-${{ matrix.target }}
+          path: gitr-v${{ needs.promote.outputs.version }}-${{ matrix.target }}.*
+
+  release:
+    needs: [promote, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create beta prerelease
+        if: needs.promote.outputs.is_stable == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ needs.promote.outputs.version }}" \
+            --prerelease \
+            --title "v${{ needs.promote.outputs.version }} (beta)" \
+            --generate-notes \
+            gitr-v${{ needs.promote.outputs.version }}-*.tar.gz \
+            gitr-v${{ needs.promote.outputs.version }}-*.zip
+
+      - name: Create stable release
+        if: needs.promote.outputs.is_stable == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ needs.promote.outputs.version }}" \
+            --title "v${{ needs.promote.outputs.version }}" \
+            --generate-notes \
+            gitr-v${{ needs.promote.outputs.version }}-*.tar.gz \
+            gitr-v${{ needs.promote.outputs.version }}-*.zip

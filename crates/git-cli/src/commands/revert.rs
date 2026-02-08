@@ -107,58 +107,56 @@ fn revert_one(
     if result.is_clean {
         if no_commit {
             writeln!(out, "Revert applied (not committed)")?;
-        } else {
-            if let Some(tree_oid) = result.tree {
-                let summary = String::from_utf8_lossy(commit.summary());
-                let message = result.message.unwrap_or_else(|| {
-                    format!(
-                        "Revert \"{}\"\n\nThis reverts commit {}.\n",
-                        summary,
-                        commit_oid.to_hex()
-                    )
-                });
+        } else if let Some(tree_oid) = result.tree {
+            let summary = String::from_utf8_lossy(commit.summary());
+            let message = result.message.unwrap_or_else(|| {
+                format!(
+                    "Revert \"{}\"\n\nThis reverts commit {}.\n",
+                    summary,
+                    commit_oid.to_hex()
+                )
+            });
 
-                let new_oid = crate::commands::cherry_pick::create_commit_default(
-                    repo,
-                    &tree_oid,
-                    &[head_oid],
-                    &message,
-                )?;
+            let new_oid = crate::commands::cherry_pick::create_commit_default(
+                repo,
+                &tree_oid,
+                &[head_oid],
+                &message,
+            )?;
 
-                update_head_to(repo, &new_oid)?;
+            update_head_to(repo, &new_oid)?;
 
-                // Update worktree to match the new tree
-                if let Some(work_tree) = repo.work_tree().map(|p| p.to_path_buf()) {
-                    // Get old tree files to detect deletions
-                    let head_obj = repo.odb().read(&head_oid)?;
-                    let old_tree_oid = match head_obj {
-                        Some(Object::Commit(c)) => Some(c.tree),
-                        _ => None,
-                    };
-                    let old_files = if let Some(ref ot) = old_tree_oid {
-                        collect_tree_files(repo.odb(), ot, "")?
-                    } else {
-                        HashSet::new()
-                    };
-                    let new_files = collect_tree_files(repo.odb(), &tree_oid, "")?;
+            // Update worktree to match the new tree
+            if let Some(work_tree) = repo.work_tree().map(|p| p.to_path_buf()) {
+                // Get old tree files to detect deletions
+                let head_obj = repo.odb().read(&head_oid)?;
+                let old_tree_oid = match head_obj {
+                    Some(Object::Commit(c)) => Some(c.tree),
+                    _ => None,
+                };
+                let old_files = if let Some(ref ot) = old_tree_oid {
+                    collect_tree_files(repo.odb(), ot, "")?
+                } else {
+                    HashSet::new()
+                };
+                let new_files = collect_tree_files(repo.odb(), &tree_oid, "")?;
 
-                    // Remove files that were deleted
-                    for f in &old_files {
-                        if !new_files.contains(f) {
-                            let _ = fs::remove_file(work_tree.join(f));
-                        }
+                // Remove files that were deleted
+                for f in &old_files {
+                    if !new_files.contains(f) {
+                        let _ = fs::remove_file(work_tree.join(f));
                     }
-
-                    super::reset::checkout_tree_to_worktree(repo.odb(), &tree_oid, &work_tree)?;
                 }
 
-                writeln!(
-                    out,
-                    "[{}] Revert \"{}\"",
-                    &new_oid.to_hex()[..7],
-                    summary
-                )?;
+                super::reset::checkout_tree_to_worktree(repo.odb(), &tree_oid, &work_tree)?;
             }
+
+            writeln!(
+                out,
+                "[{}] Revert \"{}\"",
+                &new_oid.to_hex()[..7],
+                summary
+            )?;
         }
 
         // Clean up state

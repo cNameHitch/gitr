@@ -215,11 +215,8 @@ fn parse_patch_email(content: &str) -> Result<ParsedPatch> {
             }
         } else {
             // Check for start of diff
-            if line.starts_with("diff --git ") || line.starts_with("---") && diff_start.is_none()
-            {
-                if line.starts_with("diff --git ") {
-                    diff_start = Some(i);
-                }
+            if line.starts_with("diff --git ") && diff_start.is_none() {
+                diff_start = Some(i);
             }
 
             if diff_start.is_none() {
@@ -566,7 +563,7 @@ fn build_tree_from_map(
     }
 
     // Sort entries by name (git requires sorted tree entries)
-    entries.sort_by(|a, b| git_object::TreeEntry::cmp_entries(a, b));
+    entries.sort_by(git_object::TreeEntry::cmp_entries);
 
     let tree = Tree { entries };
     let oid = repo.odb().write(&Object::Tree(tree))?;

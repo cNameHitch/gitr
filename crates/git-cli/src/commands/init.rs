@@ -59,15 +59,7 @@ pub fn run(args: &InitArgs, _cli: &Cli) -> Result<i32> {
         let stderr = io::stderr();
         let mut err = stderr.lock();
         let git_dir = repo.git_dir();
-        if args.bare {
-            writeln!(err, "Initialized empty Git repository in {}", git_dir.display())?;
-        } else {
-            writeln!(
-                err,
-                "Initialized empty Git repository in {}",
-                git_dir.display()
-            )?;
-        }
+        writeln!(err, "Initialized empty Git repository in {}", git_dir.display())?;
     }
 
     Ok(0)

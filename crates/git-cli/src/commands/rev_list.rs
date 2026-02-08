@@ -58,11 +58,13 @@ pub fn run(args: &RevListArgs, cli: &Cli) -> Result<i32> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
-    let mut walk_opts = WalkOptions::default();
-    walk_opts.max_count = args.max_count;
-    walk_opts.first_parent_only = args.first_parent;
-    walk_opts.author_pattern = args.author.clone();
-    walk_opts.grep_pattern = args.grep.clone();
+    let mut walk_opts = WalkOptions {
+        max_count: args.max_count,
+        first_parent_only: args.first_parent,
+        author_pattern: args.author.clone(),
+        grep_pattern: args.grep.clone(),
+        ..WalkOptions::default()
+    };
 
     if args.reverse {
         walk_opts.sort = git_revwalk::SortOrder::Reverse;

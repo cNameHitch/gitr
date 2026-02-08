@@ -225,7 +225,7 @@ fn build_worktree_tree(
         if fs_path.exists() && fs_path.is_file() {
             // Read actual worktree content and hash it
             let data = std::fs::read(&fs_path)?;
-            let blob = git_object::Blob { data: data.into() };
+            let blob = git_object::Blob { data };
             let blob_oid = repo.odb().write(&Object::Blob(blob))?;
             let metadata = std::fs::symlink_metadata(&fs_path)?;
             let mode = file_mode_from_metadata(&metadata);
@@ -301,7 +301,7 @@ fn collect_untracked_files(
                 .unwrap_or_default();
             if !tracked.contains(&rel) {
                 let data = std::fs::read(&path)?;
-                let blob = git_object::Blob { data: data.into() };
+                let blob = git_object::Blob { data };
                 let blob_oid = repo.odb().write(&Object::Blob(blob))?;
                 let metadata = std::fs::symlink_metadata(&path)?;
                 let mode = file_mode_from_metadata(&metadata);
@@ -390,10 +390,8 @@ fn stash_pop(cli: &Cli, index: usize, drop: bool) -> Result<i32> {
     // If there's a 3rd parent (untracked files commit), restore those too
     if stash_commit.parents.len() >= 3 {
         let untracked_oid = stash_commit.parents[2];
-        if let Some(obj) = repo.odb().read(&untracked_oid)? {
-            if let Object::Commit(c) = obj {
-                super::reset::checkout_tree_to_worktree(repo.odb(), &c.tree, &work_tree)?;
-            }
+        if let Some(Object::Commit(c)) = repo.odb().read(&untracked_oid)? {
+            super::reset::checkout_tree_to_worktree(repo.odb(), &c.tree, &work_tree)?;
         }
     }
 

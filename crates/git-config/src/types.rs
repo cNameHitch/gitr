@@ -392,25 +392,25 @@ mod tests {
 
     #[test]
     fn bool_none_is_true() {
-        assert_eq!(parse_bool(None).unwrap(), true);
+        assert!(parse_bool(None).unwrap());
     }
 
     #[test]
     fn bool_empty_is_false() {
-        assert_eq!(parse_bool(Some(BStr::new(""))).unwrap(), false);
+        assert!(!parse_bool(Some(BStr::new(""))).unwrap());
     }
 
     #[test]
     fn bool_true_variants() {
         for v in &["true", "yes", "on", "True", "YES", "On", "1"] {
-            assert_eq!(parse_bool(Some(BStr::new(v))).unwrap(), true, "failed for {}", v);
+            assert!(parse_bool(Some(BStr::new(v))).unwrap(), "failed for {}", v);
         }
     }
 
     #[test]
     fn bool_false_variants() {
         for v in &["false", "no", "off", "False", "NO", "Off", "0"] {
-            assert_eq!(parse_bool(Some(BStr::new(v))).unwrap(), false, "failed for {}", v);
+            assert!(!parse_bool(Some(BStr::new(v))).unwrap(), "failed for {}", v);
         }
     }
 

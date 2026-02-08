@@ -68,10 +68,8 @@ pub fn run(args: &CloneArgs, _cli: &Cli) -> Result<i32> {
     let reader = &mut git_protocol::pktline::PktLineReader::new(transport.reader());
     let (advertised_refs, capabilities) = git_protocol::v1::parse_ref_advertisement(reader)?;
 
-    if advertised_refs.is_empty() {
-        if !args.quiet {
-            writeln!(err, "warning: You appear to have cloned an empty repository.")?;
-        }
+    if advertised_refs.is_empty() && !args.quiet {
+        writeln!(err, "warning: You appear to have cloned an empty repository.")?;
     }
 
     // Initialize the destination repository

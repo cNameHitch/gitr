@@ -83,7 +83,7 @@ pub fn run(args: &LsFilesArgs, cli: &Cli) -> Result<i32> {
                 write!(out, "\0")?;
             } else {
                 let quoted = quote_path(entry.path.as_bytes());
-                write!(out, "{}\n", quoted)?;
+                writeln!(out, "{}", quoted)?;
             }
         }
     }

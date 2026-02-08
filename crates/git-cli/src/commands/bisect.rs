@@ -62,7 +62,7 @@ fn bisect_start(
     }
 
     // Parse optional bad and good commits from args
-    if args.len() >= 1 {
+    if !args.is_empty() {
         // First arg = bad
         let bad_oid = git_revwalk::resolve_revision(repo, &args[0])?;
         write_bisect_ref(repo, "bad", &bad_oid)?;

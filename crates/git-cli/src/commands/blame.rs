@@ -92,9 +92,9 @@ pub fn run(args: &BlameArgs, cli: &Cli) -> Result<i32> {
     let line_width = format!("{}", max_line_num).len();
 
     for entry in &entries {
-        if !commit_cache.contains_key(&entry.commit) {
+        if let std::collections::hash_map::Entry::Vacant(e) = commit_cache.entry(entry.commit) {
             if let Some(Object::Commit(c)) = repo.odb().read(&entry.commit)? {
-                commit_cache.insert(entry.commit, c);
+                e.insert(c);
             }
         }
     }
