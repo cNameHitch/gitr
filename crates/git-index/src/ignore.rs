@@ -246,6 +246,6 @@ mod tests {
         let mut stack = IgnoreStack::new();
         stack.add_patterns(content, Path::new(".gitignore"), Path::new("."));
         // Only *.o should be parsed (comment and empty lines are skipped, "   " is whitespace)
-        assert!(stack.len() >= 1);
+        assert!(!stack.is_empty());
     }
 }

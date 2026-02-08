@@ -45,8 +45,10 @@ fn diff3_markers_include_base() {
     let ours = b"a\nours_change\nc\n";
     let theirs = b"a\ntheirs_change\nc\n";
 
-    let mut opts = MergeOptions::default();
-    opts.conflict_style = ConflictStyle::Diff3;
+    let opts = MergeOptions {
+        conflict_style: ConflictStyle::Diff3,
+        ..MergeOptions::default()
+    };
 
     let result = merge_content(base, ours, theirs, &opts, &labels());
     assert!(!result.is_clean());

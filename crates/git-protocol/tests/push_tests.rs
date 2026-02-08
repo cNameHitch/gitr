@@ -91,7 +91,7 @@ fn push_update_force_with_lease() {
     };
 
     // Simulate the check: advertised ref has `actual_oid`, but we expected `expected_oid`
-    let _advertised = vec![(actual_oid, BString::from("refs/heads/main"))];
+    let _advertised = [(actual_oid, BString::from("refs/heads/main"))];
 
     // The push function would detect the mismatch and reject
     // Here we just verify the types work together

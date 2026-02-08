@@ -97,12 +97,14 @@ pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
     let format_options = FormatOptions::default();
 
     // Build walk options
-    let mut walk_opts = WalkOptions::default();
-    walk_opts.max_count = args.max_count;
-    walk_opts.skip = args.skip;
-    walk_opts.author_pattern = args.author.clone();
-    walk_opts.grep_pattern = args.grep.clone();
-    walk_opts.first_parent_only = args.first_parent;
+    let mut walk_opts = WalkOptions {
+        max_count: args.max_count,
+        skip: args.skip,
+        author_pattern: args.author.clone(),
+        grep_pattern: args.grep.clone(),
+        first_parent_only: args.first_parent,
+        ..WalkOptions::default()
+    };
     if args.reverse {
         walk_opts.sort = SortOrder::Reverse;
     }
@@ -217,9 +219,7 @@ pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
             }
             // Any remaining commit lines
             for line in commit_lines.iter().skip(graph_lines.len()) {
-                let pad: String = std::iter::repeat(' ')
-                    .take(graph_lines.first().map_or(0, |l| l.len()))
-                    .collect();
+                let pad = " ".repeat(graph_lines.first().map_or(0, |l| l.len()));
                 writeln!(out, "{} {}", pad, line)?;
             }
         } else {

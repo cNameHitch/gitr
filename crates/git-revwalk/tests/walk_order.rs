@@ -287,8 +287,10 @@ fn first_parent_only() {
 
     let repo = Repository::open(dir.path()).unwrap();
     let mut walk = RevWalk::new(&repo).unwrap();
-    let mut opts = WalkOptions::default();
-    opts.first_parent_only = true;
+    let opts = WalkOptions {
+        first_parent_only: true,
+        ..WalkOptions::default()
+    };
     walk.set_options(opts);
     walk.push_head().unwrap();
 
@@ -306,8 +308,10 @@ fn max_count_limits_output() {
 
     let repo = Repository::open(dir.path()).unwrap();
     let mut walk = RevWalk::new(&repo).unwrap();
-    let mut opts = WalkOptions::default();
-    opts.max_count = Some(2);
+    let opts = WalkOptions {
+        max_count: Some(2),
+        ..WalkOptions::default()
+    };
     walk.set_options(opts);
     walk.push_head().unwrap();
 
@@ -325,8 +329,10 @@ fn skip_commits() {
 
     let repo = Repository::open(dir.path()).unwrap();
     let mut walk = RevWalk::new(&repo).unwrap();
-    let mut opts = WalkOptions::default();
-    opts.skip = Some(1);
+    let opts = WalkOptions {
+        skip: Some(1),
+        ..WalkOptions::default()
+    };
     walk.set_options(opts);
     walk.push_head().unwrap();
 

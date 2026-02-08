@@ -165,10 +165,12 @@ pub fn run(args: &FormatPatchArgs, cli: &Cli) -> Result<i32> {
             None
         };
 
-        let mut diff_opts = DiffOptions::default();
+        let mut diff_opts = DiffOptions {
+            output_format: DiffOutputFormat::Stat,
+            ..DiffOptions::default()
+        };
 
         // First the stat
-        diff_opts.output_format = DiffOutputFormat::Stat;
         let stat_result = git_diff::tree::diff_trees(
             repo.odb(),
             parent_tree.as_ref(),

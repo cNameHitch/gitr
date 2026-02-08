@@ -581,7 +581,7 @@ mod tests {
     #[test]
     fn get_bool_or_default() {
         let set = ConfigSet::new();
-        assert_eq!(set.get_bool_or("core.bare", false).unwrap(), false);
+        assert!(!set.get_bool_or("core.bare", false).unwrap());
     }
 
     #[test]
@@ -642,8 +642,8 @@ mod tests {
         let set = ConfigSet::new();
         let push = set.get_push_config().unwrap();
         assert_eq!(push.default, PushDefault::Simple);
-        assert_eq!(push.follow_tags, false);
-        assert_eq!(push.auto_setup_remote, false);
+        assert!(!push.follow_tags);
+        assert!(!push.auto_setup_remote);
     }
 
     #[test]
@@ -656,8 +656,8 @@ mod tests {
 
         let push = set.get_push_config().unwrap();
         assert_eq!(push.default, PushDefault::Current);
-        assert_eq!(push.follow_tags, true);
-        assert_eq!(push.auto_setup_remote, true);
+        assert!(push.follow_tags);
+        assert!(push.auto_setup_remote);
     }
 
     #[test]

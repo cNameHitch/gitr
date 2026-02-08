@@ -85,11 +85,9 @@ pub fn run(args: &FetchArgs, cli: &Cli) -> Result<i32> {
     let local_refs: Vec<(ObjectId, String)> = {
         let mut refs = Vec::new();
         if let Ok(iter) = repo.refs().iter(Some("refs/")) {
-            for r in iter {
-                if let Ok(r) = r {
-                    if let Some(oid) = r.target_oid() {
-                        refs.push((oid, r.name().as_str().to_string()));
-                    }
+            for r in iter.flatten() {
+                if let Some(oid) = r.target_oid() {
+                    refs.push((oid, r.name().as_str().to_string()));
                 }
             }
         }
@@ -161,16 +159,14 @@ pub fn run(args: &FetchArgs, cli: &Cli) -> Result<i32> {
 
         let prefix = format!("refs/remotes/{}/", remote_name);
         if let Ok(iter) = repo.refs().iter(Some(&prefix)) {
-            for r in iter {
-                if let Ok(r) = r {
-                    let name = r.name().as_str().to_string();
-                    if !remote_ref_names.contains(&name) {
-                        let ref_name = RefName::new(BString::from(name.as_str()))?;
-                        repo.refs().delete_ref(&ref_name)?;
-                        if !args.quiet {
-                            let short = name.strip_prefix("refs/remotes/").unwrap_or(&name);
-                            writeln!(err, " - [deleted]         {} -> {}", remote_name, short)?;
-                        }
+            for r in iter.flatten() {
+                let name = r.name().as_str().to_string();
+                if !remote_ref_names.contains(&name) {
+                    let ref_name = RefName::new(BString::from(name.as_str()))?;
+                    repo.refs().delete_ref(&ref_name)?;
+                    if !args.quiet {
+                        let short = name.strip_prefix("refs/remotes/").unwrap_or(&name);
+                        writeln!(err, " - [deleted]         {} -> {}", remote_name, short)?;
                     }
                 }
             }

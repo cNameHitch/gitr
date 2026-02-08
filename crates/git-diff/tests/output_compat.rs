@@ -189,8 +189,10 @@ fn unified_binary_file() {
 #[test]
 fn stat_format() {
     let result = sample_multi_file_diff();
-    let mut options = DiffOptions::default();
-    options.output_format = DiffOutputFormat::Stat;
+    let options = DiffOptions {
+        output_format: DiffOutputFormat::Stat,
+        ..DiffOptions::default()
+    };
     let output = format::format_diff(&result, &options);
 
     assert!(output.contains("new_file.txt"));
@@ -202,8 +204,10 @@ fn stat_format() {
 #[test]
 fn shortstat_format() {
     let result = sample_multi_file_diff();
-    let mut options = DiffOptions::default();
-    options.output_format = DiffOutputFormat::ShortStat;
+    let options = DiffOptions {
+        output_format: DiffOutputFormat::ShortStat,
+        ..DiffOptions::default()
+    };
     let output = format::format_diff(&result, &options);
 
     assert!(output.contains("3 files changed"));
@@ -212,8 +216,10 @@ fn shortstat_format() {
 #[test]
 fn numstat_format() {
     let result = sample_multi_file_diff();
-    let mut options = DiffOptions::default();
-    options.output_format = DiffOutputFormat::NumStat;
+    let options = DiffOptions {
+        output_format: DiffOutputFormat::NumStat,
+        ..DiffOptions::default()
+    };
     let output = format::format_diff(&result, &options);
 
     // Each line: insertions\tdeletions\tpath
@@ -228,8 +234,10 @@ fn numstat_format() {
 #[test]
 fn raw_format() {
     let result = sample_multi_file_diff();
-    let mut options = DiffOptions::default();
-    options.output_format = DiffOutputFormat::Raw;
+    let options = DiffOptions {
+        output_format: DiffOutputFormat::Raw,
+        ..DiffOptions::default()
+    };
     let output = format::format_diff(&result, &options);
 
     // Raw format: each line starts with colon and has status before tab
@@ -247,8 +255,10 @@ fn raw_format() {
 #[test]
 fn name_only_format() {
     let result = sample_multi_file_diff();
-    let mut options = DiffOptions::default();
-    options.output_format = DiffOutputFormat::NameOnly;
+    let options = DiffOptions {
+        output_format: DiffOutputFormat::NameOnly,
+        ..DiffOptions::default()
+    };
     let output = format::format_diff(&result, &options);
 
     let lines: Vec<&str> = output.lines().collect();
@@ -261,8 +271,10 @@ fn name_only_format() {
 #[test]
 fn name_status_format() {
     let result = sample_multi_file_diff();
-    let mut options = DiffOptions::default();
-    options.output_format = DiffOutputFormat::NameStatus;
+    let options = DiffOptions {
+        output_format: DiffOutputFormat::NameStatus,
+        ..DiffOptions::default()
+    };
     let output = format::format_diff(&result, &options);
 
     let lines: Vec<&str> = output.lines().collect();
@@ -280,8 +292,10 @@ fn name_status_format() {
 #[test]
 fn summary_format() {
     let result = sample_multi_file_diff();
-    let mut options = DiffOptions::default();
-    options.output_format = DiffOutputFormat::Summary;
+    let options = DiffOptions {
+        output_format: DiffOutputFormat::Summary,
+        ..DiffOptions::default()
+    };
     let output = format::format_diff(&result, &options);
 
     assert!(output.contains("create mode 100644 new_file.txt"));
@@ -334,8 +348,10 @@ fn rename_in_name_status() {
             similarity: Some(95),
         }],
     };
-    let mut options = DiffOptions::default();
-    options.output_format = DiffOutputFormat::NameStatus;
+    let options = DiffOptions {
+        output_format: DiffOutputFormat::NameStatus,
+        ..DiffOptions::default()
+    };
     let output = format::format_diff(&result, &options);
 
     assert!(output.starts_with("R095"));
@@ -359,8 +375,10 @@ fn empty_diff_all_formats() {
         DiffOutputFormat::NameStatus,
         DiffOutputFormat::Summary,
     ] {
-        let mut options = DiffOptions::default();
-        options.output_format = fmt;
+        let options = DiffOptions {
+            output_format: fmt,
+            ..DiffOptions::default()
+        };
         let output = format::format_diff(&result, &options);
         assert!(output.is_empty(), "Empty diff should produce empty output for {:?}", fmt);
     }

@@ -8,12 +8,12 @@ use git_config::types::AnsiColor;
 
 #[test]
 fn bool_no_value_is_true() {
-    assert_eq!(parse_bool(None).unwrap(), true);
+    assert!(parse_bool(None).unwrap());
 }
 
 #[test]
 fn bool_empty_is_false() {
-    assert_eq!(parse_bool(Some(BStr::new(""))).unwrap(), false);
+    assert!(!parse_bool(Some(BStr::new(""))).unwrap());
 }
 
 #[test]

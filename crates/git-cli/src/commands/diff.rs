@@ -74,10 +74,12 @@ pub fn run(args: &DiffArgs, cli: &Cli) -> Result<i32> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
-    let mut diff_opts = DiffOptions::default();
-    diff_opts.output_format = determine_output_format(args);
-    diff_opts.detect_renames = args.find_renames;
-    diff_opts.detect_copies = args.find_copies;
+    let mut diff_opts = DiffOptions {
+        output_format: determine_output_format(args),
+        detect_renames: args.find_renames,
+        detect_copies: args.find_copies,
+        ..DiffOptions::default()
+    };
     if let Some(ctx) = args.context_lines {
         diff_opts.context_lines = ctx;
     }
@@ -136,38 +138,42 @@ pub fn run(args: &DiffArgs, cli: &Cli) -> Result<i32> {
             }
             for file in unstaged.files {
                 let path = file.path().clone();
-                if files_map.contains_key(&path) {
-                    // File appears in both staged and unstaged — re-diff HEAD vs worktree
-                    // Read the HEAD blob and worktree content
-                    let commit_tree = tree;
-                    if let Ok(old_data) = resolve_blob_from_tree(&repo, &commit_tree, &path) {
-                        let work_tree = repo.work_tree().unwrap().to_path_buf();
-                        let fs_path = work_tree.join(path.to_str_lossy().as_ref());
-                        if let Ok(new_data) = std::fs::read(&fs_path) {
-                            let binary = git_diff::binary::is_binary(&old_data) || git_diff::binary::is_binary(&new_data);
-                            let hunks = if binary {
-                                Vec::new()
-                            } else {
-                                git_diff::algorithm::diff_lines(&old_data, &new_data, diff_opts.algorithm, diff_opts.context_lines)
-                            };
-                            let old_oid = git_hash::hasher::Hasher::hash_object(git_hash::HashAlgorithm::Sha1, "blob", &old_data).ok();
-                            let new_oid = git_hash::hasher::Hasher::hash_object(git_hash::HashAlgorithm::Sha1, "blob", &new_data).ok();
-                            files_map.insert(path, git_diff::FileDiff {
-                                status: git_diff::FileStatus::Modified,
-                                old_path: Some(file.path().clone()),
-                                new_path: Some(file.path().clone()),
-                                old_mode: file.old_mode,
-                                new_mode: file.new_mode,
-                                old_oid,
-                                new_oid,
-                                hunks,
-                                is_binary: binary,
-                                similarity: None,
-                            });
+                match files_map.entry(path) {
+                    std::collections::btree_map::Entry::Occupied(mut entry) => {
+                        // File appears in both staged and unstaged — re-diff HEAD vs worktree
+                        // Read the HEAD blob and worktree content
+                        let commit_tree = tree;
+                        let key = entry.key().clone();
+                        if let Ok(old_data) = resolve_blob_from_tree(&repo, &commit_tree, &key) {
+                            let work_tree = repo.work_tree().unwrap().to_path_buf();
+                            let fs_path = work_tree.join(key.to_str_lossy().as_ref());
+                            if let Ok(new_data) = std::fs::read(&fs_path) {
+                                let binary = git_diff::binary::is_binary(&old_data) || git_diff::binary::is_binary(&new_data);
+                                let hunks = if binary {
+                                    Vec::new()
+                                } else {
+                                    git_diff::algorithm::diff_lines(&old_data, &new_data, diff_opts.algorithm, diff_opts.context_lines)
+                                };
+                                let old_oid = git_hash::hasher::Hasher::hash_object(git_hash::HashAlgorithm::Sha1, "blob", &old_data).ok();
+                                let new_oid = git_hash::hasher::Hasher::hash_object(git_hash::HashAlgorithm::Sha1, "blob", &new_data).ok();
+                                entry.insert(git_diff::FileDiff {
+                                    status: git_diff::FileStatus::Modified,
+                                    old_path: Some(file.path().clone()),
+                                    new_path: Some(file.path().clone()),
+                                    old_mode: file.old_mode,
+                                    new_mode: file.new_mode,
+                                    old_oid,
+                                    new_oid,
+                                    hunks,
+                                    is_binary: binary,
+                                    similarity: None,
+                                });
+                            }
                         }
                     }
-                } else {
-                    files_map.insert(path, file);
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        entry.insert(file);
+                    }
                 }
             }
             git_diff::DiffResult { files: files_map.into_values().collect() }

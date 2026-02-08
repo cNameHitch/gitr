@@ -101,7 +101,7 @@ pub fn run(args: &PushArgs, cli: &Cli) -> Result<i32> {
     let (advertised_refs, capabilities) = git_protocol::v1::parse_ref_advertisement(reader)?;
 
     // Resolve refspecs to push
-    let updates = resolve_push_updates(&repo, &remote_name, &args, &advertised_refs)?;
+    let updates = resolve_push_updates(&repo, &remote_name, args, &advertised_refs)?;
 
     if updates.is_empty() {
         writeln!(err, "Everything up-to-date")?;
@@ -299,18 +299,16 @@ fn resolve_push_updates(
             PushDefault::Matching => {
                 // Push all branches that have a matching remote branch
                 if let Ok(iter) = repo.refs().iter(Some("refs/heads/")) {
-                    for r in iter {
-                        if let Ok(r) = r {
-                            let name = r.name().as_str().to_string();
-                            if find_remote_oid(advertised_refs, &name).is_some() {
-                                if let Some(oid) = r.target_oid() {
-                                    updates.push(PushUpdate {
-                                        local_oid: Some(oid),
-                                        remote_ref: name,
-                                        force: args.force,
-                                        expected_remote_oid: None,
-                                    });
-                                }
+                    for r in iter.flatten() {
+                        let name = r.name().as_str().to_string();
+                        if find_remote_oid(advertised_refs, &name).is_some() {
+                            if let Some(oid) = r.target_oid() {
+                                updates.push(PushUpdate {
+                                    local_oid: Some(oid),
+                                    remote_ref: name,
+                                    force: args.force,
+                                    expected_remote_oid: None,
+                                });
                             }
                         }
                     }
@@ -322,18 +320,16 @@ fn resolve_push_updates(
     // Add tags if requested
     if args.tags {
         if let Ok(iter) = repo.refs().iter(Some("refs/tags/")) {
-            for r in iter {
-                if let Ok(r) = r {
-                    if let Some(oid) = r.target_oid() {
-                        let name = r.name().as_str().to_string();
-                        if find_remote_oid(advertised_refs, &name).is_none() {
-                            updates.push(PushUpdate {
-                                local_oid: Some(oid),
-                                remote_ref: name,
-                                force: false,
-                                expected_remote_oid: None,
-                            });
-                        }
+            for r in iter.flatten() {
+                if let Some(oid) = r.target_oid() {
+                    let name = r.name().as_str().to_string();
+                    if find_remote_oid(advertised_refs, &name).is_none() {
+                        updates.push(PushUpdate {
+                            local_oid: Some(oid),
+                            remote_ref: name,
+                            force: false,
+                            expected_remote_oid: None,
+                        });
                     }
                 }
             }
@@ -391,11 +387,9 @@ fn build_pack_data(
             return Ok(());
         }
         all_oids.push(*oid);
-        if let Some(obj) = odb.read(oid)? {
-            if let git_object::Object::Tree(tree) = obj {
-                for entry in tree.iter() {
-                    walk_tree(odb, &entry.oid, all_oids, seen)?;
-                }
+        if let Some(git_object::Object::Tree(tree)) = odb.read(oid)? {
+            for entry in tree.iter() {
+                walk_tree(odb, &entry.oid, all_oids, seen)?;
             }
         }
         Ok(())
@@ -406,10 +400,8 @@ fn build_pack_data(
             continue;
         }
         all_oids.push(*oid);
-        if let Some(obj) = repo.odb().read(oid)? {
-            if let git_object::Object::Commit(c) = &obj {
-                walk_tree(repo.odb(), &c.tree, &mut all_oids, &mut seen)?;
-            }
+        if let Some(git_object::Object::Commit(c)) = repo.odb().read(oid)? {
+            walk_tree(repo.odb(), &c.tree, &mut all_oids, &mut seen)?;
         }
     }
 

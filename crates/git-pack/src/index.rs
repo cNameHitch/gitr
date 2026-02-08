@@ -504,8 +504,8 @@ mod tests {
 
         // Fanout: 1 object at bucket 0x42
         let mut fanout = [0u32; 256];
-        for i in 0x42..256 {
-            fanout[i] = 1;
+        for slot in &mut fanout[0x42..] {
+            *slot = 1;
         }
         for count in fanout {
             buf.extend_from_slice(&count.to_be_bytes());

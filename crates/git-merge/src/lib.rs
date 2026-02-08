@@ -282,7 +282,7 @@ mod tests {
             conflict_count: 1,
         };
         assert!(!result.is_clean());
-        assert!(result.content().len() > 0);
+        assert!(!result.content().is_empty());
     }
 
     #[test]
