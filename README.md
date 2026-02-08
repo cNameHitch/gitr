@@ -25,30 +25,54 @@ Gitr is a ground-up Git implementation written in Rust across 16 modular library
 - **Modular** — 16 focused crates with clear boundaries and no circular dependencies.
 - **Fast** — Memory-mapped packfile I/O, zero-copy parsing, lazy object loading, and parallel operations via `rayon`.
 
-## Quick Start
+## Installation
 
-### Prerequisites
+### Pre-built binaries
 
-- [Rust 1.75+](https://rustup.rs/) (install via `rustup`)
-- C Git (for interop tests only)
+Download a prebuilt binary from [GitHub Releases](https://github.com/cNameHitch/gitr/releases).
 
-### Build
+Binaries are available for:
+
+| Platform | Target | Archive |
+|----------|--------|---------|
+| Linux (x86_64) | `x86_64-unknown-linux-gnu` | `.tar.gz` |
+| Linux (ARM64) | `aarch64-unknown-linux-gnu` | `.tar.gz` |
+| macOS (Apple Silicon) | `aarch64-apple-darwin` | `.tar.gz` |
+| Windows (x86_64) | `x86_64-pc-windows-msvc` | `.zip` |
+
+**Linux / macOS:**
+
+```bash
+# Download (replace VERSION and TARGET)
+curl -LO https://github.com/cNameHitch/gitr/releases/download/vVERSION/gitr-vVERSION-TARGET.tar.gz
+
+# Extract and install
+tar xzf gitr-vVERSION-TARGET.tar.gz
+sudo install gitr /usr/local/bin/
+```
+
+**Windows:**
+
+Download the `.zip` from the [releases page](https://github.com/cNameHitch/gitr/releases), extract it, and add `gitr.exe` to your `PATH`.
+
+### Build from source
+
+Requires [Rust 1.75+](https://rustup.rs/).
 
 ```bash
 git clone https://github.com/cNameHitch/gitr.git
 cd gitr
-cargo build --release
-```
-
-The binary is written to `target/release/gitr`.
-
-### Install
-
-```bash
 cargo install --path crates/git-cli
 ```
 
-### Usage
+Or build without installing:
+
+```bash
+cargo build --release
+# Binary: target/release/gitr
+```
+
+## Usage
 
 Gitr mirrors the Git CLI interface:
 
