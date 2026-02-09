@@ -11,6 +11,15 @@ use git_repository::Repository;
 use crate::commit_graph::CommitGraph;
 use crate::RevWalkError;
 
+/// Lightweight commit metadata for traversal (no author/committer strings).
+#[allow(dead_code)]
+struct CommitMeta {
+    parents: Vec<ObjectId>,
+    tree_oid: ObjectId,
+    commit_time: i64,
+    generation: u32,
+}
+
 /// Sort order for commit traversal.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SortOrder {
@@ -46,12 +55,10 @@ struct WalkEntry {
     oid: ObjectId,
     /// Committer timestamp (seconds since epoch).
     commit_date: i64,
-    /// Author timestamp (seconds since epoch) — used for future author-date graph pruning.
-    #[allow(dead_code)]
-    author_date: i64,
-    /// Generation number from commit-graph (0 if unavailable) — used for pruning.
-    #[allow(dead_code)]
-    generation: u32,
+    /// Author timestamp (seconds since epoch).
+    _author_date: i64,
+    /// Generation number from commit-graph (0 if unavailable).
+    _generation: u32,
     /// Insertion counter for stable ordering.
     insertion_ctr: u64,
 }
@@ -231,12 +238,53 @@ impl<'a> RevWalk<'a> {
         let entry = WalkEntry {
             oid,
             commit_date: sort_date,
-            author_date: commit.author.date.timestamp,
-            generation,
+            _author_date: commit.author.date.timestamp,
+            _generation: generation,
             insertion_ctr: self.insertion_ctr,
         };
         self.insertion_ctr += 1;
         self.queue.push(entry);
+    }
+
+    fn enqueue_meta(&mut self, oid: ObjectId, meta: &CommitMeta) {
+        let sort_date = match self.sort {
+            SortOrder::AuthorDate => meta.commit_time, // commit-graph doesn't store author date separately
+            _ => meta.commit_time,
+        };
+
+        let entry = WalkEntry {
+            oid,
+            commit_date: sort_date,
+            _author_date: meta.commit_time,
+            _generation: meta.generation,
+            insertion_ctr: self.insertion_ctr,
+        };
+        self.insertion_ctr += 1;
+        self.queue.push(entry);
+    }
+
+    /// Read commit metadata, preferring commit-graph over ODB.
+    fn read_commit_meta(&self, oid: &ObjectId) -> Result<CommitMeta, RevWalkError> {
+        // Try commit-graph first for zero-copy access.
+        if let Some(ref cg) = self.commit_graph {
+            if let Some(entry) = cg.lookup(oid) {
+                return Ok(CommitMeta {
+                    parents: entry.parent_oids,
+                    tree_oid: entry.tree_oid,
+                    commit_time: entry.commit_time,
+                    generation: entry.generation,
+                });
+            }
+        }
+
+        // Fall back to ODB.
+        let commit = self.read_commit(oid)?;
+        Ok(CommitMeta {
+            parents: commit.parents.clone(),
+            tree_oid: commit.tree,
+            commit_time: commit.committer.date.timestamp,
+            generation: 0,
+        })
     }
 
     fn read_commit(&self, oid: &ObjectId) -> Result<Commit, RevWalkError> {
@@ -259,14 +307,15 @@ impl<'a> RevWalk<'a> {
     }
 
     /// Mark a commit and all its ancestors as hidden.
+    /// Uses generation numbers from the commit-graph to prune early when possible.
     fn mark_hidden(&mut self, oid: ObjectId) -> Result<(), RevWalkError> {
         let mut stack = vec![oid];
         while let Some(current) = stack.pop() {
             if !self.hidden.insert(current) {
                 continue;
             }
-            if let Ok(commit) = self.read_commit(&current) {
-                for parent in &commit.parents {
+            if let Ok(meta) = self.read_commit_meta(&current) {
+                for parent in &meta.parents {
                     if !self.hidden.contains(parent) {
                         stack.push(*parent);
                     }
@@ -309,17 +358,14 @@ impl<'a> RevWalk<'a> {
             if self.hidden.contains(&oid) {
                 continue;
             }
-            let commit = self.read_commit(&oid)?;
-            let commit_date = match self.sort {
-                SortOrder::AuthorDate => commit.author.date.timestamp,
-                _ => commit.committer.date.timestamp,
-            };
+            let meta = self.read_commit_meta(&oid)?;
+            let commit_date = meta.commit_time;
             dates.insert(oid, commit_date);
 
             let parents: Vec<ObjectId> = if self.options.first_parent_only {
-                commit.parents.first().copied().into_iter().collect()
+                meta.parents.first().copied().into_iter().collect()
             } else {
-                commit.parents.clone()
+                meta.parents
             };
 
             // Initialize in-degree for this commit if not yet seen.
@@ -382,12 +428,12 @@ impl<'a> RevWalk<'a> {
             _ => return Ok(None),
         };
 
-        // Read commit to get parents (borrows self immutably).
-        let commit = self.read_commit(&oid)?;
+        // Read commit metadata to get parents (graph-accelerated).
+        let meta = self.read_commit_meta(&oid)?;
         let parents: Vec<ObjectId> = if self.options.first_parent_only {
-            commit.parents.first().copied().into_iter().collect()
+            meta.parents.first().copied().into_iter().collect()
         } else {
-            commit.parents.clone()
+            meta.parents
         };
 
         // Filter parents by hidden set first (immutable borrow of self.hidden).
@@ -427,19 +473,19 @@ impl<'a> RevWalk<'a> {
                 continue;
             }
 
-            // Read commit and enqueue parents.
-            let commit = self.read_commit(&oid)?;
+            // Read commit metadata (graph-accelerated) and enqueue parents.
+            let meta = self.read_commit_meta(&oid)?;
 
             let parents: Vec<ObjectId> = if self.options.first_parent_only {
-                commit.parents.first().copied().into_iter().collect()
+                meta.parents.first().copied().into_iter().collect()
             } else {
-                commit.parents.clone()
+                meta.parents
             };
 
             for parent in parents {
                 if self.seen.insert(parent) && !self.hidden.contains(&parent) {
-                    if let Ok(parent_commit) = self.read_commit(&parent) {
-                        self.enqueue(parent, &parent_commit);
+                    if let Ok(parent_meta) = self.read_commit_meta(&parent) {
+                        self.enqueue_meta(parent, &parent_meta);
                     }
                 }
             }
@@ -462,16 +508,16 @@ impl<'a> RevWalk<'a> {
                         if self.hidden.contains(&oid) {
                             continue;
                         }
-                        let commit = self.read_commit(&oid)?;
+                        let meta = self.read_commit_meta(&oid)?;
                         let parents: Vec<ObjectId> = if self.options.first_parent_only {
-                            commit.parents.first().copied().into_iter().collect()
+                            meta.parents.first().copied().into_iter().collect()
                         } else {
-                            commit.parents.clone()
+                            meta.parents
                         };
                         for parent in parents {
                             if self.seen.insert(parent) && !self.hidden.contains(&parent) {
-                                if let Ok(parent_commit) = self.read_commit(&parent) {
-                                    self.enqueue(parent, &parent_commit);
+                                if let Ok(parent_meta) = self.read_commit_meta(&parent) {
+                                    self.enqueue_meta(parent, &parent_meta);
                                 }
                             }
                         }
@@ -541,6 +587,12 @@ impl Iterator for RevWalk<'_> {
             }
         }
 
+        let has_pattern_filters = self.options.author_pattern.is_some()
+            || self.options.committer_pattern.is_some()
+            || self.options.grep_pattern.is_some();
+        let has_date_filters = self.options.since.is_some() || self.options.until.is_some();
+        let needs_full_commit = has_pattern_filters || has_date_filters;
+
         loop {
             let oid = match self.next_raw() {
                 Ok(Some(oid)) => oid,
@@ -548,18 +600,20 @@ impl Iterator for RevWalk<'_> {
                 Err(e) => return Some(Err(e)),
             };
 
-            // Apply filters.
-            let commit = match self.read_commit(&oid) {
-                Ok(c) => c,
-                Err(e) => return Some(Err(e)),
-            };
+            // Only do a full commit read when filters require author/committer/message strings.
+            if needs_full_commit {
+                let commit = match self.read_commit(&oid) {
+                    Ok(c) => c,
+                    Err(e) => return Some(Err(e)),
+                };
 
-            if !self.passes_date_filter(&commit) {
-                continue;
-            }
+                if !self.passes_date_filter(&commit) {
+                    continue;
+                }
 
-            if !self.passes_pattern_filter(&commit) {
-                continue;
+                if !self.passes_pattern_filter(&commit) {
+                    continue;
+                }
             }
 
             // Handle --skip.

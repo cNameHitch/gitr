@@ -1,0 +1,70 @@
+name: Benchmarks
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: bench-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  pull-requests: write
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  REGRESSION_THRESHOLD: "5"
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Checkout main branch (full history for baseline)
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bench
+
+      # 2. Run benchmarks on main (baseline)
+      - name: Bench main
+        run: cargo bench -p git-cli --bench perf_compare -- --save-baseline main
+
+      # 3. Checkout PR branch (preserve target/ with main baseline)
+      - uses: actions/checkout@v4
+        with:
+          clean: false
+
+      # 4. Run benchmarks on PR branch
+      - name: Bench PR
+        run: cargo bench -p git-cli --bench perf_compare -- --save-baseline pr
+
+      # 5. Compare baselines
+      - name: Compare results
+        run: python3 scripts/ci/bench-compare.py --base main --pr pr --threshold "$REGRESSION_THRESHOLD"
+
+      # 6. Post results as PR comment
+      - name: Post comment
+        if: always()
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: bench-results.md
+
+      # 7. Fail if regressions found
+      - name: Check regressions
+        run: |
+          python3 -c "
+          import json, sys
+          with open('bench-results.json') as f:
+              data = json.load(f)
+          if data['has_regression']:
+              print('::error::Performance regressions detected! See PR comment for details.')
+              sys.exit(1)
+          print('No regressions found.')
+          "

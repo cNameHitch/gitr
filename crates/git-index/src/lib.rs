@@ -131,9 +131,10 @@ impl Index {
         }
     }
 
-    /// Read the index from a file.
+    /// Read the index from a file (memory-mapped for large indices).
     pub fn read_from(path: impl AsRef<Path>) -> Result<Self, IndexError> {
-        let data = std::fs::read(path.as_ref())?;
+        let file = std::fs::File::open(path.as_ref())?;
+        let data = unsafe { memmap2::Mmap::map(&file) }?;
         read::parse_index(&data)
     }
 

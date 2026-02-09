@@ -16,6 +16,7 @@ git-index = { workspace = true }
 git-repository = { workspace = true }
 bstr = { workspace = true }
 thiserror = { workspace = true }
+rayon = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

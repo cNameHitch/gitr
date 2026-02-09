@@ -14,6 +14,7 @@ pub mod cherry_pick;
 pub mod clean;
 pub mod clone;
 pub mod commit;
+pub mod commit_graph;
 pub mod config;
 pub mod commit_tree;
 pub mod credential;
@@ -224,6 +225,10 @@ pub enum Commands {
     Bundle(bundle::BundleArgs),
     /// A really simple server for Git repositories
     Daemon(daemon::DaemonArgs),
+
+    // === Spec 022: Performance optimization ===
+    /// Write and verify commit-graph files
+    CommitGraph(commit_graph::CommitGraphArgs),
 }
 
 /// Open a repository, respecting --git-dir override.
@@ -311,5 +316,7 @@ pub fn run(cli: Cli) -> Result<i32> {
         Commands::FastImport(args) => fast_import::run(args, &cli),
         Commands::Bundle(args) => bundle::run(args, &cli),
         Commands::Daemon(args) => daemon::run(args, &cli),
+        // Spec 022: Performance optimization
+        Commands::CommitGraph(args) => commit_graph::run(args, &cli),
     }
 }

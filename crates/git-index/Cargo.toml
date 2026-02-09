@@ -14,6 +14,7 @@ git-object = { workspace = true }
 git-odb = { workspace = true }
 bstr = { workspace = true }
 thiserror = { workspace = true }
+memmap2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

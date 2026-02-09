@@ -6,6 +6,7 @@
 //! Format: see Documentation/technical/commit-graph-format.txt in git source.
 
 mod parse;
+pub mod write;
 
 use std::path::Path;
 
@@ -21,6 +22,8 @@ pub struct CommitGraph {
     data: Mmap,
     /// Number of commits in the graph.
     num_commits: u32,
+    /// Offset to the OID Fanout chunk (256 × 4-byte cumulative counts).
+    oid_fanout_offset: usize,
     /// Offset to the OID Lookup chunk.
     oid_lookup_offset: usize,
     /// Offset to the Commit Data chunk.
@@ -100,6 +103,37 @@ impl CommitGraph {
     /// Look up a commit in the graph by OID.
     pub fn lookup(&self, oid: &ObjectId) -> Option<CommitGraphEntry> {
         parse::lookup_commit(self, oid)
+    }
+
+    /// Fast existence check without full entry parsing.
+    pub fn contains(&self, oid: &ObjectId) -> bool {
+        parse::find_oid_position(self, oid).is_some()
+    }
+
+    /// Validate checksum integrity of the commit-graph file.
+    pub fn verify(&self) -> Result<(), RevWalkError> {
+        use sha1::Digest;
+
+        if self.data.len() < self.hash_len {
+            return Err(RevWalkError::InvalidCommitGraph(
+                "file too small for checksum".into(),
+            ));
+        }
+
+        let content_len = self.data.len() - self.hash_len;
+        let stored_checksum = &self.data[content_len..];
+
+        let mut hasher = sha1::Sha1::new();
+        hasher.update(&self.data[..content_len]);
+        let computed = hasher.finalize();
+
+        if computed.as_slice() != stored_checksum {
+            return Err(RevWalkError::InvalidCommitGraph(
+                "checksum mismatch".into(),
+            ));
+        }
+
+        Ok(())
     }
 
     /// Get the number of commits in the graph.

@@ -502,6 +502,7 @@ dependencies = [
  "git-odb",
  "git-repository",
  "git-utils",
+ "rayon",
  "tempfile",
  "thiserror",
 ]
@@ -528,6 +529,7 @@ dependencies = [
  "git-object",
  "git-odb",
  "git-utils",
+ "memmap2",
  "tempfile",
  "thiserror",
 ]
@@ -657,6 +659,7 @@ dependencies = [
  "git-repository",
  "git-utils",
  "memmap2",
+ "sha1",
  "tempfile",
  "thiserror",
 ]
