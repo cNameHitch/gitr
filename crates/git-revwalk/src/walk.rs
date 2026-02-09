@@ -56,9 +56,9 @@ struct WalkEntry {
     /// Committer timestamp (seconds since epoch).
     commit_date: i64,
     /// Author timestamp (seconds since epoch).
-    author_date: i64,
+    _author_date: i64,
     /// Generation number from commit-graph (0 if unavailable).
-    generation: u32,
+    _generation: u32,
     /// Insertion counter for stable ordering.
     insertion_ctr: u64,
 }
@@ -238,8 +238,8 @@ impl<'a> RevWalk<'a> {
         let entry = WalkEntry {
             oid,
             commit_date: sort_date,
-            author_date: commit.author.date.timestamp,
-            generation,
+            _author_date: commit.author.date.timestamp,
+            _generation: generation,
             insertion_ctr: self.insertion_ctr,
         };
         self.insertion_ctr += 1;
@@ -255,8 +255,8 @@ impl<'a> RevWalk<'a> {
         let entry = WalkEntry {
             oid,
             commit_date: sort_date,
-            author_date: meta.commit_time,
-            generation: meta.generation,
+            _author_date: meta.commit_time,
+            _generation: meta.generation,
             insertion_ctr: self.insertion_ctr,
         };
         self.insertion_ctr += 1;
