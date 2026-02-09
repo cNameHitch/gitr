@@ -7,7 +7,7 @@ use git_diff::format::format_diff;
 use git_diff::{DiffOptions, DiffOutputFormat};
 use git_hash::ObjectId;
 use git_object::{Commit, Object};
-use git_revwalk::{format_builtin, BuiltinFormat, FormatOptions};
+use git_revwalk::{format_builtin, format_commit, BuiltinFormat, FormatOptions};
 
 use super::open_repo;
 use crate::Cli;
@@ -72,26 +72,70 @@ fn show_commit(
     args: &ShowArgs,
     out: &mut impl Write,
 ) -> Result<()> {
-    let format_options = FormatOptions::default();
+    let format_options = FormatOptions { abbrev_len: 40, ..FormatOptions::default() };
 
-    let preset = match args.format.as_deref() {
-        Some("oneline") => BuiltinFormat::Oneline,
-        Some("short") => BuiltinFormat::Short,
-        Some("full") => BuiltinFormat::Full,
-        Some("fuller") => BuiltinFormat::Fuller,
-        Some("raw") => BuiltinFormat::Raw,
-        _ => BuiltinFormat::Medium,
+    // Determine format
+    let fmt_str = args.format.as_deref();
+    let (preset, custom_format) = match fmt_str {
+        Some("oneline") => (BuiltinFormat::Oneline, None),
+        Some("short") => (BuiltinFormat::Short, None),
+        Some("full") => (BuiltinFormat::Full, None),
+        Some("fuller") => (BuiltinFormat::Fuller, None),
+        Some("raw") => (BuiltinFormat::Raw, None),
+        Some("medium") | None => (BuiltinFormat::Medium, None),
+        Some(custom) => {
+            let fmt = if let Some(stripped) = custom.strip_prefix("format:") {
+                stripped
+            } else if let Some(stripped) = custom.strip_prefix("tformat:") {
+                stripped
+            } else {
+                custom
+            };
+            (BuiltinFormat::Medium, Some(fmt.to_string()))
+        }
     };
 
-    let formatted = format_builtin(commit, oid, preset, &format_options);
-    write!(out, "{}", formatted)?;
-
-    if preset == BuiltinFormat::Oneline {
+    if let Some(ref fmt) = custom_format {
+        let formatted = format_commit(commit, oid, fmt, &format_options);
+        write!(out, "{}", formatted)?;
         writeln!(out)?;
+    } else {
+        // For medium/full/fuller: add merge header if merge commit
+        if commit.parents.len() > 1
+            && matches!(
+                preset,
+                BuiltinFormat::Medium | BuiltinFormat::Full | BuiltinFormat::Fuller
+            )
+        {
+            // The builtin format starts with "commit <oid>\n".
+            // We need to inject "Merge: <parent1> <parent2>" after that line.
+            let formatted = format_builtin(commit, oid, preset, &format_options);
+            let mut lines = formatted.splitn(2, '\n');
+            if let Some(first_line) = lines.next() {
+                writeln!(out, "{}", first_line)?;
+                // Insert Merge: header
+                let short_parents: Vec<String> = commit
+                    .parents
+                    .iter()
+                    .map(|p| p.to_hex()[..7].to_string())
+                    .collect();
+                writeln!(out, "Merge: {}", short_parents.join(" "))?;
+                if let Some(rest) = lines.next() {
+                    write!(out, "{}", rest)?;
+                }
+            }
+        } else {
+            let formatted = format_builtin(commit, oid, preset, &format_options);
+            write!(out, "{}", formatted)?;
+        }
+
+        if preset == BuiltinFormat::Oneline {
+            writeln!(out)?;
+        }
     }
 
     // Show diff unless --no-patch
-    if !args.no_patch {
+    if !args.no_patch && custom_format.is_none() {
         let parent_tree = if let Some(parent_oid) = commit.first_parent() {
             let parent_obj = repo.odb().read(parent_oid)?;
             match parent_obj {
@@ -120,22 +164,7 @@ fn show_commit(
 
         if !result.is_empty() {
             let output = format_diff(&result, &diff_opts);
-            write!(out, "{}", output)?;
-        }
-
-        // If stat was requested, also show the unified diff
-        if args.stat {
-            diff_opts.output_format = DiffOutputFormat::Unified;
-            let result = git_diff::tree::diff_trees(
-                repo.odb(),
-                parent_tree.as_ref(),
-                Some(&commit.tree),
-                &diff_opts,
-            )?;
-            if !result.is_empty() {
-                let output = format_diff(&result, &diff_opts);
-                write!(out, "{}", output)?;
-            }
+            write!(out, "\n{}", output)?;
         }
     }
 

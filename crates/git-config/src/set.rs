@@ -9,6 +9,28 @@ use crate::file::ConfigFile;
 use crate::types::{self, ColorSpec, PushConfig, PushDefault};
 use crate::{ConfigEntry, ConfigKey, ConfigScope};
 
+/// Return platform-specific system config file paths in discovery order.
+fn system_config_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        paths.push(PathBuf::from(
+            "/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig",
+        ));
+        paths.push(PathBuf::from(
+            "/Applications/Xcode.app/Contents/Developer/usr/share/git-core/gitconfig",
+        ));
+        paths.push(PathBuf::from("/usr/local/etc/gitconfig"));
+        paths.push(PathBuf::from("/opt/homebrew/etc/gitconfig"));
+    }
+
+    // Linux and fallback for all platforms
+    paths.push(PathBuf::from("/etc/gitconfig"));
+
+    paths
+}
+
 /// Merged configuration from all scopes.
 pub struct ConfigSet {
     /// Config files in precedence order (low to high).
@@ -43,14 +65,25 @@ impl ConfigSet {
 
         // System config
         if !skip_system {
-            let system_path = std::env::var_os("GIT_CONFIG_SYSTEM")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("/etc/gitconfig"));
-            if system_path.exists() {
-                match ConfigFile::load(&system_path, ConfigScope::System) {
-                    Ok(file) => set.add_file(file),
-                    Err(ConfigError::FileNotFound(_)) => {}
-                    Err(e) => return Err(e),
+            if let Some(path) = std::env::var_os("GIT_CONFIG_SYSTEM").map(PathBuf::from) {
+                if path.exists() {
+                    match ConfigFile::load(&path, ConfigScope::System) {
+                        Ok(file) => set.add_file(file),
+                        Err(ConfigError::FileNotFound(_)) => {}
+                        Err(e) => return Err(e),
+                    }
+                }
+            } else {
+                let system_paths = system_config_paths();
+                for path in system_paths {
+                    if path.exists() {
+                        match ConfigFile::load(&path, ConfigScope::System) {
+                            Ok(file) => set.add_file(file),
+                            Err(ConfigError::FileNotFound(_)) => {}
+                            Err(e) => return Err(e),
+                        }
+                        break; // Use first found
+                    }
                 }
             }
         }

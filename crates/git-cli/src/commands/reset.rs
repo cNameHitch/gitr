@@ -29,24 +29,23 @@ pub struct ResetArgs {
     #[arg(long)]
     merge: bool,
 
-    /// Commit to reset to
-    #[arg(default_value = "HEAD")]
-    commit: String,
-
-    /// Paths to reset (unstage specific files)
-    #[arg(last = true)]
-    paths: Vec<String>,
+    /// Commit to reset to, or paths to unstage
+    #[arg(trailing_var_arg = true)]
+    args: Vec<String>,
 }
 
 pub fn run(args: &ResetArgs, cli: &Cli) -> Result<i32> {
     let mut repo = open_repo(cli)?;
 
+    // Parse args: disambiguate commit vs paths
+    let (commit, paths) = parse_reset_args(&args.args, &repo);
+
     // If paths are given, this is a path-based reset (unstage files)
-    if !args.paths.is_empty() {
-        return reset_paths(&mut repo, &args.commit, &args.paths);
+    if !paths.is_empty() {
+        return reset_paths(&mut repo, &commit, &paths);
     }
 
-    let target_oid = git_revwalk::resolve_revision(&repo, &args.commit)?;
+    let target_oid = git_revwalk::resolve_revision(&repo, &commit)?;
 
     // Read the target commit's tree
     let obj = repo.odb().read(&target_oid)?
@@ -88,6 +87,35 @@ pub fn run(args: &ResetArgs, cli: &Cli) -> Result<i32> {
     let _ = std::fs::remove_file(git_dir.join("MERGE_MODE"));
 
     Ok(0)
+}
+
+/// Parse reset arguments: disambiguate commit vs pathspecs.
+/// Returns (commit_ref, paths).
+fn parse_reset_args(args: &[String], repo: &git_repository::Repository) -> (String, Vec<String>) {
+    if args.is_empty() {
+        return ("HEAD".to_string(), Vec::new());
+    }
+
+    // If "--" is present, everything before is commit, everything after is paths
+    if let Some(sep_pos) = args.iter().position(|a| a == "--") {
+        let commit = if sep_pos > 0 {
+            args[0].clone()
+        } else {
+            "HEAD".to_string()
+        };
+        let paths = args[sep_pos + 1..].to_vec();
+        return (commit, paths);
+    }
+
+    // Try first arg as revision
+    if git_revwalk::resolve_revision(repo, &args[0]).is_ok() {
+        // First arg is a valid revision
+        let paths = args[1..].to_vec();
+        return (args[0].clone(), paths);
+    }
+
+    // First arg is not a revision — treat all as paths with implicit HEAD
+    ("HEAD".to_string(), args.to_vec())
 }
 
 fn reset_paths(

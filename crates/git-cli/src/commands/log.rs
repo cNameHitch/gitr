@@ -1,13 +1,16 @@
+use std::collections::HashMap;
 use std::io::{self, Write};
 
 use anyhow::Result;
 use clap::Args;
 use git_diff::format::format_diff;
 use git_diff::{DiffOptions, DiffOutputFormat};
+use git_hash::ObjectId;
 use git_object::{Commit, Object};
+use git_ref::RefStore;
 use git_revwalk::{
-    format_builtin, format_commit, BuiltinFormat, FormatOptions, GraphDrawer, RevWalk,
-    SortOrder, WalkOptions,
+    format_builtin_with_decorations, format_commit_with_decorations, BuiltinFormat, FormatOptions,
+    GraphDrawer, RevWalk, SortOrder, WalkOptions,
 };
 use super::open_repo;
 use crate::Cli;
@@ -62,6 +65,10 @@ pub struct LogArgs {
     #[arg(short = 'p', long)]
     patch: bool,
 
+    /// Decorate commits with ref names
+    #[arg(long)]
+    decorate: bool,
+
     /// Show all refs
     #[arg(long)]
     all: bool,
@@ -94,7 +101,11 @@ pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
 
     // Parse format
     let (builtin, custom_format) = parse_format(args);
-    let format_options = FormatOptions::default();
+    let mut format_options = FormatOptions::default();
+    // --oneline is shorthand for --format=oneline --abbrev-commit
+    if args.oneline {
+        format_options.abbrev_len = 7;
+    }
 
     // Build walk options
     let mut walk_opts = WalkOptions {
@@ -169,6 +180,13 @@ pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
         }
     }
 
+    // Build decoration map if needed
+    let decorations = if args.decorate {
+        Some(build_decoration_map(&repo)?)
+    } else {
+        None
+    };
+
     // Graph drawer
     let mut graph_drawer = if args.graph {
         Some(GraphDrawer::new())
@@ -193,9 +211,9 @@ pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
 
         // Format the commit
         let formatted = if let Some(ref fmt) = custom_format {
-            format_commit(&commit, &oid, fmt, &format_options)
+            format_commit_with_decorations(&commit, &oid, fmt, &format_options, decorations.as_ref())
         } else {
-            format_builtin(&commit, &oid, builtin, &format_options)
+            format_builtin_with_decorations(&commit, &oid, builtin, &format_options, decorations.as_ref())
         };
 
         // Add separator between commits for multi-line formats
@@ -236,6 +254,91 @@ pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
     }
 
     Ok(0)
+}
+
+fn build_decoration_map(repo: &git_repository::Repository) -> Result<HashMap<ObjectId, Vec<String>>> {
+    let mut map: HashMap<ObjectId, Vec<String>> = HashMap::new();
+
+    // Get HEAD info
+    let head_oid = repo.head_oid()?;
+    let current_branch = repo.current_branch()?;
+
+    // Collect all decorations per OID, then order: HEAD -> current, tag:*, other branches, remotes
+    // We build separate lists and merge at the end.
+    let mut head_entries: HashMap<ObjectId, String> = HashMap::new();
+    let mut tag_entries: HashMap<ObjectId, Vec<String>> = HashMap::new();
+    let mut branch_entries: HashMap<ObjectId, Vec<String>> = HashMap::new();
+    let mut remote_entries: HashMap<ObjectId, Vec<String>> = HashMap::new();
+
+    // Local branches
+    if let Ok(refs) = repo.refs().iter(Some("refs/heads/")) {
+        for r in refs {
+            let r = r?;
+            let name = r.name().as_str().to_string();
+            let short = name.strip_prefix("refs/heads/").unwrap_or(&name).to_string();
+            if let Ok(oid) = r.peel_to_oid(repo.refs()) {
+                if current_branch.as_deref() == Some(short.as_str()) {
+                    if let Some(ho) = head_oid {
+                        if ho == oid {
+                            head_entries.insert(oid, format!("HEAD -> {}", short));
+                            continue;
+                        }
+                    }
+                }
+                branch_entries.entry(oid).or_default().push(short);
+            }
+        }
+    }
+
+    // Tags
+    if let Ok(refs) = repo.refs().iter(Some("refs/tags/")) {
+        for r in refs {
+            let r = r?;
+            let name = r.name().as_str().to_string();
+            let short = name.strip_prefix("refs/tags/").unwrap_or(&name).to_string();
+            if let Ok(oid) = r.peel_to_oid(repo.refs()) {
+                tag_entries.entry(oid).or_default().push(format!("tag: {}", short));
+            }
+        }
+    }
+
+    // Remote-tracking branches
+    if let Ok(refs) = repo.refs().iter(Some("refs/remotes/")) {
+        for r in refs {
+            let r = r?;
+            let name = r.name().as_str().to_string();
+            let short = name.strip_prefix("refs/remotes/").unwrap_or(&name).to_string();
+            if let Ok(oid) = r.peel_to_oid(repo.refs()) {
+                remote_entries.entry(oid).or_default().push(short);
+            }
+        }
+    }
+
+    // Merge: order is HEAD -> current, tag:*, local branches, remote branches
+    let all_oids: std::collections::HashSet<ObjectId> = head_entries.keys()
+        .chain(tag_entries.keys())
+        .chain(branch_entries.keys())
+        .chain(remote_entries.keys())
+        .copied()
+        .collect();
+
+    for oid in all_oids {
+        let entry = map.entry(oid).or_default();
+        if let Some(head) = head_entries.get(&oid) {
+            entry.push(head.clone());
+        }
+        if let Some(tags) = tag_entries.get(&oid) {
+            entry.extend(tags.iter().cloned());
+        }
+        if let Some(branches) = branch_entries.get(&oid) {
+            entry.extend(branches.iter().cloned());
+        }
+        if let Some(remotes) = remote_entries.get(&oid) {
+            entry.extend(remotes.iter().cloned());
+        }
+    }
+
+    Ok(map)
 }
 
 fn parse_format(args: &LogArgs) -> (BuiltinFormat, Option<String>) {
@@ -313,7 +416,7 @@ fn show_commit_diff(
 
     if !result.is_empty() {
         let output = format_diff(&result, &diff_opts);
-        write!(out, "{}", output)?;
+        write!(out, "\n{}", output)?;
     }
 
     // If both stat and patch were requested, show stat then patch

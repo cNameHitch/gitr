@@ -38,6 +38,10 @@ pub struct LsTreeArgs {
     #[arg(long)]
     full_tree: bool,
 
+    /// Show object size in long listing format
+    #[arg(short = 'l', long)]
+    long: bool,
+
     /// NUL line terminator
     #[arg(short = 'z')]
     nul_terminated: bool,
@@ -57,9 +61,6 @@ pub fn run(args: &LsTreeArgs, cli: &Cli) -> Result<i32> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
-    let name_only = args.name_only || args.name_status;
-    let terminator = if args.nul_terminated { '\0' } else { '\n' };
-
     // Resolve the tree-ish to a tree OID
     let oid = git_revwalk::resolve_revision(&repo, &args.tree_ish)?;
 
@@ -71,7 +72,7 @@ pub fn run(args: &LsTreeArgs, cli: &Cli) -> Result<i32> {
         None => bail!("not found: {}", args.tree_ish),
     };
 
-    list_tree(odb, &tree_oid, "", args, name_only, terminator, &mut out)?;
+    list_tree(odb, &tree_oid, "", args, &mut out)?;
 
     Ok(0)
 }
@@ -81,14 +82,15 @@ fn list_tree(
     tree_oid: &ObjectId,
     prefix: &str,
     args: &LsTreeArgs,
-    name_only: bool,
-    terminator: char,
     out: &mut impl Write,
 ) -> Result<()> {
     let tree = match odb.read(tree_oid)? {
         Some(git_object::Object::Tree(t)) => t,
         _ => bail!("not a tree: {}", tree_oid.to_hex()),
     };
+
+    let name_only = args.name_only || args.name_status;
+    let terminator = if args.nul_terminated { '\0' } else { '\n' };
 
     for entry in tree.iter() {
         let name = entry.name.to_str_lossy();
@@ -113,13 +115,13 @@ fn list_tree(
         if is_tree && args.recurse {
             // When recursing, optionally show the tree entry itself
             if args.show_trees {
-                print_entry(entry, &full_path, name_only, terminator, out)?;
+                print_entry(odb, entry, &full_path, name_only, args.long, terminator, out)?;
             }
-            list_tree(odb, &entry.oid, &full_path, args, name_only, terminator, out)?;
+            list_tree(odb, &entry.oid, &full_path, args, out)?;
         } else if args.trees_only && !is_tree {
             continue;
         } else {
-            print_entry(entry, &full_path, name_only, terminator, out)?;
+            print_entry(odb, entry, &full_path, name_only, args.long, terminator, out)?;
         }
     }
 
@@ -127,9 +129,11 @@ fn list_tree(
 }
 
 fn print_entry(
+    odb: &git_odb::ObjectDatabase,
     entry: &git_object::TreeEntry,
     full_path: &str,
     name_only: bool,
+    long: bool,
     terminator: char,
     out: &mut impl Write,
 ) -> Result<()> {
@@ -143,15 +147,36 @@ fn print_entry(
         } else {
             "blob"
         };
-        write!(
-            out,
-            "{:06o} {} {}\t{}{}",
-            entry.mode.raw(),
-            type_name,
-            entry.oid.to_hex(),
-            full_path,
-            terminator,
-        )?;
+        if long {
+            let size = if entry.mode.is_tree() {
+                "-".to_string()
+            } else {
+                match odb.read(&entry.oid) {
+                    Ok(Some(git_object::Object::Blob(blob))) => format!("{}", blob.data.len()),
+                    _ => "-".to_string(),
+                }
+            };
+            write!(
+                out,
+                "{:06o} {} {} {:>7}\t{}{}",
+                entry.mode.raw(),
+                type_name,
+                entry.oid.to_hex(),
+                size,
+                full_path,
+                terminator,
+            )?;
+        } else {
+            write!(
+                out,
+                "{:06o} {} {}\t{}{}",
+                entry.mode.raw(),
+                type_name,
+                entry.oid.to_hex(),
+                full_path,
+                terminator,
+            )?;
+        }
     }
     Ok(())
 }

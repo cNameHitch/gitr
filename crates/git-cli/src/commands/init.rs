@@ -14,7 +14,7 @@ pub struct InitArgs {
     bare: bool,
 
     /// Override the name of the initial branch
-    #[arg(long, value_name = "branch-name")]
+    #[arg(short = 'b', long, value_name = "branch-name")]
     initial_branch: Option<String>,
 
     /// Directory from which templates will be used
@@ -38,6 +38,11 @@ pub fn run(args: &InitArgs, _cli: &Cli) -> Result<i32> {
         Some(dir) => dir.clone(),
         None => std::env::current_dir()?,
     };
+
+    // Create target directory and parents if needed (FR-006)
+    if !target.exists() {
+        std::fs::create_dir_all(&target)?;
+    }
 
     let hash_algo = if let Some(ref fmt) = args.object_format {
         git_hash::HashAlgorithm::from_name(fmt)

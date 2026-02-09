@@ -62,8 +62,17 @@ pub fn run(args: &CheckIgnoreArgs, cli: &Cli) -> Result<i32> {
         let mut matching_linenum: Option<usize> = None;
 
         for (source, linenum, pattern, negated) in &patterns {
-            let wm = WildmatchPattern::new(BStr::new(pattern.as_bytes()), WildmatchFlags::PATHNAME);
-            if wm.matches(bpath) {
+            // Handle directory patterns (ending with /)
+            let matches = if let Some(dir_pat) = pattern.strip_suffix('/') {
+                // A trailing-/ pattern matches the dir name and any path starting with it
+                let path_str = path.as_str();
+                path_str == dir_pat
+                    || path_str.starts_with(&format!("{}/", dir_pat))
+            } else {
+                let wm = WildmatchPattern::new(BStr::new(pattern.as_bytes()), WildmatchFlags::PATHNAME);
+                wm.matches(bpath)
+            };
+            if matches {
                 if *negated {
                     is_ignored = false;
                     matching_pattern = None;

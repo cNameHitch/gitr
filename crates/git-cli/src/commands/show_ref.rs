@@ -140,5 +140,5 @@ fn verify_refs(
         }
     }
 
-    if all_ok { Ok(0) } else { Ok(1) }
+    if all_ok { Ok(0) } else { Ok(128) }
 }

@@ -87,7 +87,7 @@ pub fn run(args: &DiffArgs, cli: &Cli) -> Result<i32> {
     let is_cached = args.cached || args.staged;
 
     // Parse arguments: figure out if we have commits, pathspecs, or both
-    let (commits, _pathspecs) = parse_diff_args(&args.args);
+    let (commits, _pathspecs) = parse_diff_args(&args.args, &repo);
 
     let result = if commits.len() == 2 {
         // git diff <commit1> <commit2>
@@ -218,20 +218,38 @@ fn determine_output_format(args: &DiffArgs) -> DiffOutputFormat {
     }
 }
 
-fn parse_diff_args(args: &[String]) -> (Vec<String>, Vec<String>) {
+fn parse_diff_args(args: &[String], repo: &git_repository::Repository) -> (Vec<String>, Vec<String>) {
     let mut commits = Vec::new();
     let mut pathspecs = Vec::new();
     let mut saw_separator = false;
+    let mut in_pathspec_mode = false;
 
     for arg in args {
         if arg == "--" {
             saw_separator = true;
+            in_pathspec_mode = true;
             continue;
         }
-        if saw_separator {
+        if saw_separator || in_pathspec_mode {
             pathspecs.push(arg.clone());
         } else {
-            commits.push(arg.clone());
+            // Try as revision first; if that fails and the path exists, treat as pathspec
+            match git_revwalk::resolve_revision(repo, arg) {
+                Ok(_) => commits.push(arg.clone()),
+                Err(_) => {
+                    if std::path::Path::new(arg).exists()
+                        || repo
+                            .work_tree()
+                            .map(|wt| wt.join(arg).exists())
+                            .unwrap_or(false)
+                    {
+                        pathspecs.push(arg.clone());
+                        in_pathspec_mode = true;
+                    } else {
+                        commits.push(arg.clone());
+                    }
+                }
+            }
         }
     }
 

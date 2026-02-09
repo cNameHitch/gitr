@@ -140,23 +140,35 @@ fn format_file_diff(out: &mut String, file: &FileDiff, _options: &DiffOptions) {
 
         // Hunks
         for hunk in &file.hunks {
-            format_hunk(out, hunk);
+            format_hunk_for_status(out, hunk, Some(&file.status));
         }
     }
 }
 
-/// Format a hunk header and lines.
-fn format_hunk(out: &mut String, hunk: &Hunk) {
-    // @@ header — omit count when it equals 1 (git convention)
-    let old_range = if hunk.old_count == 1 {
-        format!("{}", hunk.old_start)
+/// Format a hunk header and lines with file status context.
+fn format_hunk_for_status(out: &mut String, hunk: &Hunk, status: Option<&FileStatus>) {
+    // For new files, old side is 0,0; for deleted files, new side is 0,0
+    let (old_start, old_count) = if status == Some(&FileStatus::Added) {
+        (0u32, 0u32)
     } else {
-        format!("{},{}", hunk.old_start, hunk.old_count)
+        (hunk.old_start, hunk.old_count)
     };
-    let new_range = if hunk.new_count == 1 {
-        format!("{}", hunk.new_start)
+    let (new_start, new_count) = if status == Some(&FileStatus::Deleted) {
+        (0u32, 0u32)
     } else {
-        format!("{},{}", hunk.new_start, hunk.new_count)
+        (hunk.new_start, hunk.new_count)
+    };
+
+    // @@ header — omit count when it equals 1 (git convention)
+    let old_range = if old_count == 1 {
+        format!("{}", old_start)
+    } else {
+        format!("{},{}", old_start, old_count)
+    };
+    let new_range = if new_count == 1 {
+        format!("{}", new_start)
+    } else {
+        format!("{},{}", new_start, new_count)
     };
     out.push_str(&format!("@@ -{} +{} @@", old_range, new_range));
     if let Some(ref header) = hunk.header {

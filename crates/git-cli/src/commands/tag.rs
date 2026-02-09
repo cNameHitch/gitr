@@ -36,6 +36,10 @@ pub struct TagArgs {
     #[arg(short, long)]
     force: bool,
 
+    /// Show tag annotation (up to N lines)
+    #[arg(short = 'n', num_args = 0..=1, default_missing_value = "1")]
+    show_annotation: Option<usize>,
+
     /// Tag name
     name: Option<String>,
 
@@ -48,9 +52,9 @@ pub fn run(args: &TagArgs, cli: &Cli) -> Result<i32> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
-    // List mode (no name given, or -l flag)
-    if args.list || args.name.is_none() && !args.delete {
-        return list_tags(&repo, &mut out);
+    // List mode (no name given, or -l flag, or -n flag without name)
+    if args.list || (args.name.is_none() && !args.delete) || (args.show_annotation.is_some() && args.name.is_none()) {
+        return list_tags(&repo, args.show_annotation, &mut out);
     }
 
     let name = args.name.as_deref().unwrap();
@@ -105,13 +109,30 @@ pub fn run(args: &TagArgs, cli: &Cli) -> Result<i32> {
     Ok(0)
 }
 
-fn list_tags(repo: &git_repository::Repository, out: &mut impl Write) -> Result<i32> {
+fn list_tags(repo: &git_repository::Repository, show_annotation: Option<usize>, out: &mut impl Write) -> Result<i32> {
     let refs = repo.refs().iter(Some("refs/tags/"))?;
     for r in refs {
         let r = r?;
         let full = r.name().as_str();
         let short = full.strip_prefix("refs/tags/").unwrap_or(full);
-        writeln!(out, "{}", short)?;
+
+        if let Some(max_lines) = show_annotation {
+            // Try to read annotation from tag object
+            if let Ok(oid) = r.peel_to_oid(repo.refs()) {
+                if let Ok(Some(Object::Tag(tag))) = repo.odb().read(&oid) {
+                    let msg = String::from_utf8_lossy(&tag.message);
+                    let lines: Vec<&str> = msg.lines().collect();
+                    let show_n = max_lines.max(1);
+                    let annotation: String = lines.iter().take(show_n).map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+                    writeln!(out, "{:<16}{}", short, annotation)?;
+                    continue;
+                }
+            }
+            // Lightweight tag - no annotation
+            writeln!(out, "{}", short)?;
+        } else {
+            writeln!(out, "{}", short)?;
+        }
     }
     Ok(0)
 }

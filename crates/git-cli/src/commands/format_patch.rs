@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Args;
 use git_diff::format::format_diff;
+use git_diff::format::nameonly::format_summary;
 use git_diff::{DiffOptions, DiffOutputFormat};
 use git_hash::ObjectId;
 use git_object::{Commit, Object};
@@ -44,6 +45,10 @@ pub struct FormatPatchArgs {
     #[arg(long)]
     max_count: Option<usize>,
 
+    /// Output patches to stdout instead of files
+    #[arg(long)]
+    stdout: bool,
+
     /// Revision range
     revision: String,
 }
@@ -53,14 +58,6 @@ pub fn run(args: &FormatPatchArgs, cli: &Cli) -> Result<i32> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
-    // Determine output directory
-    let output_dir = if let Some(ref dir) = args.output_directory {
-        fs::create_dir_all(dir)?;
-        dir.clone()
-    } else {
-        PathBuf::from(".")
-    };
-
     // Collect commits
     let commits = collect_commits(&repo, &args.revision, args.max_count)?;
     let total = commits.len();
@@ -68,6 +65,85 @@ pub fn run(args: &FormatPatchArgs, cli: &Cli) -> Result<i32> {
     if total == 0 {
         return Ok(0);
     }
+
+    if args.stdout {
+        // Output all patches to stdout
+        for (i, (oid, commit)) in commits.iter().rev().enumerate() {
+            let patch_num = args.start_number + i;
+            let subject = String::from_utf8_lossy(commit.summary());
+
+            writeln!(out, "From {} Mon Sep 17 00:00:00 2001", oid.to_hex())?;
+            writeln!(out, "From: {} <{}>",
+                String::from_utf8_lossy(&commit.author.name),
+                String::from_utf8_lossy(&commit.author.email))?;
+            writeln!(out, "Date: {}", commit.author.date.format(DateFormat::Rfc2822))?;
+
+            if args.numbered || total > 1 {
+                writeln!(out, "Subject: [{} {}/{}] {}", args.subject_prefix, patch_num, total, subject)?;
+            } else {
+                writeln!(out, "Subject: [{}] {}", args.subject_prefix, subject)?;
+            }
+
+            writeln!(out)?;
+
+            if let Some(body) = commit.body() {
+                let body_str = String::from_utf8_lossy(body);
+                write!(out, "{}", body_str)?;
+                writeln!(out)?;
+            }
+
+            writeln!(out, "---")?;
+
+            let parent_tree = if let Some(parent_oid) = commit.first_parent() {
+                match repo.odb().read(parent_oid)? {
+                    Some(Object::Commit(pc)) => Some(pc.tree),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+
+            let mut diff_opts = DiffOptions {
+                output_format: DiffOutputFormat::Stat,
+                ..DiffOptions::default()
+            };
+
+            let stat_result = git_diff::tree::diff_trees(
+                repo.odb(), parent_tree.as_ref(), Some(&commit.tree), &diff_opts)?;
+            if !stat_result.is_empty() {
+                let stat_output = format_diff(&stat_result, &diff_opts);
+                write!(out, "{}", stat_output)?;
+                let summary = format_summary(&stat_result);
+                if !summary.is_empty() {
+                    write!(out, "{}", summary)?;
+                }
+            }
+
+            writeln!(out)?;
+
+            diff_opts.output_format = DiffOutputFormat::Unified;
+            let diff_result = git_diff::tree::diff_trees(
+                repo.odb(), parent_tree.as_ref(), Some(&commit.tree), &diff_opts)?;
+            if !diff_result.is_empty() {
+                let diff_output = format_diff(&diff_result, &diff_opts);
+                write!(out, "{}", diff_output)?;
+            }
+
+            writeln!(out, "-- ")?;
+            writeln!(out, "{}", git_version_string())?;
+            writeln!(out)?;
+        }
+
+        return Ok(0);
+    }
+
+    // Determine output directory
+    let output_dir = if let Some(ref dir) = args.output_directory {
+        fs::create_dir_all(dir)?;
+        dir.clone()
+    } else {
+        PathBuf::from(".")
+    };
 
     // Generate cover letter if requested
     if args.cover_letter {
@@ -102,45 +178,21 @@ pub fn run(args: &FormatPatchArgs, cli: &Cli) -> Result<i32> {
         let mut file = fs::File::create(&filename)?;
 
         // Write email headers
-        writeln!(
-            file,
-            "From {} Mon Sep 17 00:00:00 2001",
-            oid.to_hex()
-        )?;
-        writeln!(
-            file,
-            "From: {} <{}>",
+        writeln!(file, "From {} Mon Sep 17 00:00:00 2001", oid.to_hex())?;
+        writeln!(file, "From: {} <{}>",
             String::from_utf8_lossy(&commit.author.name),
-            String::from_utf8_lossy(&commit.author.email)
-        )?;
-        writeln!(
-            file,
-            "Date: {}",
-            commit.author.date.format(DateFormat::Rfc2822)
-        )?;
+            String::from_utf8_lossy(&commit.author.email))?;
+        writeln!(file, "Date: {}", commit.author.date.format(DateFormat::Rfc2822))?;
 
         // Subject line
         if args.numbered || total > 1 {
-            writeln!(
-                file,
-                "Subject: [{} {}/{}] {}",
-                args.subject_prefix, patch_num, total, subject
-            )?;
+            writeln!(file, "Subject: [{} {}/{}] {}", args.subject_prefix, patch_num, total, subject)?;
         } else {
-            writeln!(
-                file,
-                "Subject: [{}] {}",
-                args.subject_prefix, subject
-            )?;
+            writeln!(file, "Subject: [{}] {}", args.subject_prefix, subject)?;
         }
 
         if args.thread {
-            writeln!(
-                file,
-                "Message-Id: <{}.{}.git-gitr@localhost>",
-                oid.to_hex(),
-                patch_num
-            )?;
+            writeln!(file, "Message-Id: <{}.{}.git-gitr@localhost>", oid.to_hex(), patch_num)?;
         }
 
         writeln!(file)?;
@@ -156,8 +208,7 @@ pub fn run(args: &FormatPatchArgs, cli: &Cli) -> Result<i32> {
 
         // Diff
         let parent_tree = if let Some(parent_oid) = commit.first_parent() {
-            let parent_obj = repo.odb().read(parent_oid)?;
-            match parent_obj {
+            match repo.odb().read(parent_oid)? {
                 Some(Object::Commit(pc)) => Some(pc.tree),
                 _ => None,
             }
@@ -170,35 +221,29 @@ pub fn run(args: &FormatPatchArgs, cli: &Cli) -> Result<i32> {
             ..DiffOptions::default()
         };
 
-        // First the stat
         let stat_result = git_diff::tree::diff_trees(
-            repo.odb(),
-            parent_tree.as_ref(),
-            Some(&commit.tree),
-            &diff_opts,
-        )?;
+            repo.odb(), parent_tree.as_ref(), Some(&commit.tree), &diff_opts)?;
         if !stat_result.is_empty() {
             let stat_output = format_diff(&stat_result, &diff_opts);
             write!(file, "{}", stat_output)?;
+            let summary = format_summary(&stat_result);
+            if !summary.is_empty() {
+                write!(file, "{}", summary)?;
+            }
         }
 
         writeln!(file)?;
 
-        // Then the unified diff
         diff_opts.output_format = DiffOutputFormat::Unified;
         let diff_result = git_diff::tree::diff_trees(
-            repo.odb(),
-            parent_tree.as_ref(),
-            Some(&commit.tree),
-            &diff_opts,
-        )?;
+            repo.odb(), parent_tree.as_ref(), Some(&commit.tree), &diff_opts)?;
         if !diff_result.is_empty() {
             let diff_output = format_diff(&diff_result, &diff_opts);
             write!(file, "{}", diff_output)?;
         }
 
-        writeln!(file, "--")?;
-        writeln!(file, "gitr")?;
+        writeln!(file, "-- ")?;
+        writeln!(file, "{}", git_version_string())?;
 
         writeln!(out, "{}", filename.display())?;
     }
@@ -222,15 +267,19 @@ fn collect_commits(
             };
             walker.set_options(walk_opts);
         }
-    } else {
+    } else if max_count.is_some() {
+        // -<n> <revision>: walk backwards from revision with max_count
         let oid = git_revwalk::resolve_revision(repo, range)?;
         walker.push(oid)?;
-
         let walk_opts = git_revwalk::WalkOptions {
-            max_count: Some(max_count.unwrap_or(1)),
+            max_count,
             ..Default::default()
         };
         walker.set_options(walk_opts);
+    } else {
+        // Single revision without max_count means "since that revision" (revision..HEAD)
+        let implicit_range = format!("{}..HEAD", range);
+        walker.push_range(&implicit_range)?;
     }
 
     let mut commits = Vec::new();
@@ -243,6 +292,12 @@ fn collect_commits(
     }
 
     Ok(commits)
+}
+
+/// Return git version string for format-patch trailer.
+/// Uses the gitr version; tests should normalize this field.
+fn git_version_string() -> String {
+    format!("gitr {}", env!("CARGO_PKG_VERSION"))
 }
 
 fn truncate_str(s: &str, max_len: usize) -> &str {

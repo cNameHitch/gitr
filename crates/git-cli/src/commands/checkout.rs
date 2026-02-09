@@ -116,7 +116,13 @@ pub fn run(args: &CheckoutArgs, cli: &Cli) -> Result<i32> {
                 force: args.force,
                 target: Some(target.clone()),
             };
-            return switch::run(&switch_args, cli);
+            match switch::run(&switch_args, cli) {
+                Ok(code) => return Ok(code),
+                Err(_) => {
+                    eprintln!("error: pathspec '{}' did not match any file(s) known to git", target);
+                    return Ok(1);
+                }
+            }
         }
     }
 

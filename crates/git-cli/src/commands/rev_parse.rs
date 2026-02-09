@@ -40,9 +40,13 @@ pub struct RevParseArgs {
     #[arg(short = 'q', long)]
     quiet: bool,
 
-    /// Resolve abbreviations
+    /// Show abbreviated ref name
     #[arg(long)]
-    short: Option<Option<usize>>,
+    abbrev_ref: bool,
+
+    /// Resolve abbreviations
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "7")]
+    short: Option<usize>,
 
     /// Revision or option arguments
     #[arg(value_name = "arg")]
@@ -131,9 +135,35 @@ pub fn run(args: &RevParseArgs, cli: &Cli) -> Result<i32> {
     let repo = open_repo(cli)?;
 
     for arg in &args.args {
+        if args.abbrev_ref {
+            // For HEAD, show the branch name instead of OID
+            if arg == "HEAD" {
+                if let Ok(Some(branch)) = repo.current_branch() {
+                    writeln!(out, "{}", branch)?;
+                    continue;
+                }
+            }
+            // For refs/heads/X, show X
+            let short = arg
+                .strip_prefix("refs/heads/")
+                .or_else(|| arg.strip_prefix("refs/remotes/"))
+                .or_else(|| arg.strip_prefix("refs/tags/"))
+                .unwrap_or(arg);
+            writeln!(out, "{}", short)?;
+            continue;
+        }
+
         if args.verify {
             match git_revwalk::resolve_revision(&repo, arg) {
-                Ok(oid) => writeln!(out, "{}", oid.to_hex())?,
+                Ok(oid) => {
+                    let hex = oid.to_hex();
+                    let output = if let Some(len) = args.short {
+                        hex[..len.min(hex.len())].to_string()
+                    } else {
+                        hex
+                    };
+                    writeln!(out, "{}", output)?;
+                }
                 Err(_) => {
                     if !args.quiet {
                         eprintln!("fatal: Needed a single revision");
@@ -143,7 +173,15 @@ pub fn run(args: &RevParseArgs, cli: &Cli) -> Result<i32> {
             }
         } else {
             match git_revwalk::resolve_revision(&repo, arg) {
-                Ok(oid) => writeln!(out, "{}", oid.to_hex())?,
+                Ok(oid) => {
+                    let hex = oid.to_hex();
+                    let output = if let Some(len) = args.short {
+                        hex[..len.min(hex.len())].to_string()
+                    } else {
+                        hex
+                    };
+                    writeln!(out, "{}", output)?;
+                }
                 Err(e) => {
                     if !args.quiet {
                         bail!("ambiguous argument '{}': {}", arg, e);

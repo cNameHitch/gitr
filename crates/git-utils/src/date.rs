@@ -263,10 +263,10 @@ impl GitDate {
                     .with_timezone(&offset);
 
                 match fmt {
-                    DateFormat::Default => dt.format("%a %b %e %H:%M:%S %Y %z").to_string(),
+                    DateFormat::Default => dt.format("%a %b %-e %H:%M:%S %Y %z").to_string(),
                     DateFormat::Iso => dt.format("%Y-%m-%d %H:%M:%S %z").to_string(),
                     DateFormat::IsoStrict => dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string(),
-                    DateFormat::Rfc2822 => dt.format("%a, %d %b %Y %H:%M:%S %z").to_string(),
+                    DateFormat::Rfc2822 => dt.format("%a, %-d %b %Y %H:%M:%S %z").to_string(),
                     DateFormat::Short => dt.format("%Y-%m-%d").to_string(),
                     DateFormat::Local => {
                         let local_dt = DateTime::from_timestamp(self.timestamp, 0)

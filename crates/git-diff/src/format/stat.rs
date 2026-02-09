@@ -34,6 +34,9 @@ pub fn format_stat(result: &DiffResult, options: &DiffOptions) -> String {
         .unwrap_or(1)
         .max(1);
 
+    // Calculate the width needed for the count field
+    let count_width = format!("{}", max_changes).len();
+
     for file in &result.files {
         let path = display_path(file);
         let ins = file.insertions();
@@ -65,11 +68,12 @@ pub fn format_stat(result: &DiffResult, options: &DiffOptions) -> String {
                 .collect();
 
             out.push_str(&format!(
-                " {:<width$} | {:>3} {}\n",
+                " {:<name_width$} | {:>count_width$} {}\n",
                 path,
                 total,
                 graph,
-                width = max_name_width
+                name_width = max_name_width,
+                count_width = count_width
             ));
         }
     }

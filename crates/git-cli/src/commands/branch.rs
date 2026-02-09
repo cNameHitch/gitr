@@ -34,6 +34,10 @@ pub struct BranchArgs {
     #[arg(short, long)]
     remotes: bool,
 
+    /// Show branch details (verbose)
+    #[arg(short = 'v', long)]
+    verbose: bool,
+
     /// List branches matching pattern
     #[arg(long)]
     list: bool,
@@ -112,8 +116,13 @@ fn delete_branch(
 ) -> Result<i32> {
     let refname = RefName::new(BString::from(format!("refs/heads/{}", name)))?;
 
-    let reference = repo.refs().resolve(&refname)?
-        .ok_or_else(|| anyhow::anyhow!("error: branch '{}' not found", name))?;
+    let reference = match repo.refs().resolve(&refname)? {
+        Some(r) => r,
+        None => {
+            eprintln!("error: branch '{}' not found.", name);
+            return Ok(1);
+        }
+    };
 
     // Check if it's the current branch
     if let Ok(Some(current)) = repo.current_branch() {
@@ -188,15 +197,46 @@ fn list_branches(
     let current_branch = repo.current_branch().unwrap_or(None);
 
     if !args.remotes || args.all {
-        // List local branches
+        // List local branches - collect first for alignment
         let refs = repo.refs().iter(Some("refs/heads/"))?;
+        let mut branches: Vec<(String, bool)> = Vec::new();
+        let mut ref_map: Vec<git_ref::Reference> = Vec::new();
         for r in refs {
             let r = r?;
             let full_name = r.name().as_str().to_string();
-            let short = full_name.strip_prefix("refs/heads/").unwrap_or(&full_name);
-            let is_current = current_branch.as_deref() == Some(short);
-            let prefix = if is_current { "* " } else { "  " };
-            writeln!(out, "{}{}", prefix, short)?;
+            let short = full_name.strip_prefix("refs/heads/").unwrap_or(&full_name).to_string();
+            let is_current = current_branch.as_deref() == Some(short.as_str());
+            branches.push((short, is_current));
+            ref_map.push(r);
+        }
+
+        // Find max branch name length for alignment in verbose mode
+        let max_name_len = if args.verbose {
+            branches.iter().map(|(name, _)| name.len()).max().unwrap_or(0)
+        } else {
+            0
+        };
+
+        for (i, (short, is_current)) in branches.iter().enumerate() {
+            let prefix = if *is_current { "* " } else { "  " };
+
+            if args.verbose {
+                if let Ok(oid) = ref_map[i].peel_to_oid(repo.refs()) {
+                    let hex = oid.to_hex();
+                    let short_hash = &hex[..7.min(hex.len())];
+                    let subject = match repo.odb().read(&oid) {
+                        Ok(Some(git_object::Object::Commit(c))) => {
+                            String::from_utf8_lossy(c.summary()).to_string()
+                        }
+                        _ => String::new(),
+                    };
+                    writeln!(out, "{}{:<width$} {} {}", prefix, short, short_hash, subject, width = max_name_len)?;
+                } else {
+                    writeln!(out, "{}{}", prefix, short)?;
+                }
+            } else {
+                writeln!(out, "{}{}", prefix, short)?;
+            }
         }
     }
 
