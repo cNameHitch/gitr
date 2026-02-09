@@ -8,11 +8,22 @@ use git_hash::ObjectId;
 use git_index::Stage;
 use git_object::FileMode;
 use git_repository::Repository;
+use rayon::prelude::*;
 
 use crate::algorithm;
 use crate::binary::is_binary;
 use crate::tree::{diff_trees, read_blob};
 use crate::{DiffError, DiffOptions, DiffResult, FileDiff, FileStatus};
+
+/// Result of the parallel stat phase for a single index entry.
+enum StatResult {
+    /// Stat matches index: file is clean, skip.
+    Clean,
+    /// Stat differs: needs content comparison. Carries filesystem metadata.
+    StatMismatch(std::fs::Metadata),
+    /// File deleted from working tree.
+    Deleted,
+}
 
 /// Compute a blob OID for working tree content.
 fn hash_blob(data: &[u8]) -> Option<ObjectId> {
@@ -56,78 +67,99 @@ pub fn diff_index_to_worktree(
     };
 
     let odb = repo.odb();
+
+    // Phase A: Parallel stat — classify each entry as Clean/StatMismatch/Deleted.
+    // Each entry independently calls symlink_metadata() and compares stat data.
+    let stat_results: Vec<StatResult> = entries
+        .par_iter()
+        .map(|entry| {
+            let fs_path = work_tree.join(entry.path.to_str_lossy().as_ref());
+            if !fs_path.exists() {
+                return StatResult::Deleted;
+            }
+            match std::fs::symlink_metadata(&fs_path) {
+                Ok(metadata) => {
+                    if entry.stat.matches(&metadata) {
+                        StatResult::Clean
+                    } else {
+                        StatResult::StatMismatch(metadata)
+                    }
+                }
+                Err(_) => StatResult::Deleted,
+            }
+        })
+        .collect();
+
+    // Phase B: Sequential content comparison for non-clean entries.
+    // Processes entries in original index order for deterministic output.
     let mut files = Vec::new();
 
-    for entry in &entries {
-        let fs_path = work_tree.join(entry.path.to_str_lossy().as_ref());
+    for (entry, stat_result) in entries.iter().zip(stat_results.into_iter()) {
+        match stat_result {
+            StatResult::Clean => continue,
+            StatResult::Deleted => {
+                let blob_data = read_blob(odb, &entry.oid)?;
+                let binary = is_binary(&blob_data);
+                let hunks = if binary {
+                    Vec::new()
+                } else {
+                    algorithm::diff_lines(&blob_data, &[], options.algorithm, options.context_lines)
+                };
+                files.push(FileDiff {
+                    status: FileStatus::Deleted,
+                    old_path: Some(entry.path.clone()),
+                    new_path: None,
+                    old_mode: Some(entry.mode),
+                    new_mode: None,
+                    old_oid: Some(entry.oid),
+                    new_oid: None,
+                    hunks,
+                    is_binary: binary,
+                    similarity: None,
+                });
+            }
+            StatResult::StatMismatch(metadata) => {
+                let fs_path = work_tree.join(entry.path.to_str_lossy().as_ref());
+                let worktree_content = std::fs::read(&fs_path)?;
+                let blob_data = read_blob(odb, &entry.oid)?;
 
-        if !fs_path.exists() {
-            // File deleted from working tree but still in index
-            let blob_data = read_blob(odb, &entry.oid)?;
-            let binary = is_binary(&blob_data);
-            let hunks = if binary {
-                Vec::new()
-            } else {
-                algorithm::diff_lines(&blob_data, &[], options.algorithm, options.context_lines)
-            };
-            files.push(FileDiff {
-                status: FileStatus::Deleted,
-                old_path: Some(entry.path.clone()),
-                new_path: None,
-                old_mode: Some(entry.mode),
-                new_mode: None,
-                old_oid: Some(entry.oid),
-                new_oid: None,
-                hunks,
-                is_binary: binary,
-                similarity: None,
-            });
-            continue;
+                if worktree_content == blob_data {
+                    // Content identical despite stat change (racily clean)
+                    continue;
+                }
+
+                let new_mode = file_mode_from_metadata(&metadata);
+                let binary = is_binary(&blob_data) || is_binary(&worktree_content);
+
+                let hunks = if binary {
+                    Vec::new()
+                } else {
+                    algorithm::diff_lines(
+                        &blob_data,
+                        &worktree_content,
+                        options.algorithm,
+                        options.context_lines,
+                    )
+                };
+
+                files.push(FileDiff {
+                    status: if entry.mode != new_mode && !mode_is_same_type(entry.mode, new_mode) {
+                        FileStatus::TypeChanged
+                    } else {
+                        FileStatus::Modified
+                    },
+                    old_path: Some(entry.path.clone()),
+                    new_path: Some(entry.path.clone()),
+                    old_mode: Some(entry.mode),
+                    new_mode: Some(new_mode),
+                    old_oid: Some(entry.oid),
+                    new_oid: hash_blob(&worktree_content),
+                    hunks,
+                    is_binary: binary,
+                    similarity: None,
+                });
+            }
         }
-
-        let metadata = std::fs::symlink_metadata(&fs_path)?;
-
-        // Use stat comparison first (fast path)
-        if entry.stat.matches(&metadata) {
-            continue; // No change
-        }
-
-        // Stat differs: read the file and compare content
-        let worktree_content = std::fs::read(&fs_path)?;
-        let blob_data = read_blob(odb, &entry.oid)?;
-
-        if worktree_content == blob_data {
-            // Content identical despite stat change (racily clean)
-            continue;
-        }
-
-        // Determine mode change
-        let new_mode = file_mode_from_metadata(&metadata);
-
-        let binary = is_binary(&blob_data) || is_binary(&worktree_content);
-
-        let hunks = if binary {
-            Vec::new()
-        } else {
-            algorithm::diff_lines(&blob_data, &worktree_content, options.algorithm, options.context_lines)
-        };
-
-        files.push(FileDiff {
-            status: if entry.mode != new_mode && !mode_is_same_type(entry.mode, new_mode) {
-                FileStatus::TypeChanged
-            } else {
-                FileStatus::Modified
-            },
-            old_path: Some(entry.path.clone()),
-            new_path: Some(entry.path.clone()),
-            old_mode: Some(entry.mode),
-            new_mode: Some(new_mode),
-            old_oid: Some(entry.oid),
-            new_oid: hash_blob(&worktree_content),
-            hunks,
-            is_binary: binary,
-            similarity: None,
-        });
     }
 
     Ok(DiffResult { files })

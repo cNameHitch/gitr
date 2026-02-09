@@ -20,6 +20,7 @@ pub use walk::{RevWalk, SortOrder, WalkOptions};
 pub use range::{RevisionRange, resolve_revision};
 pub use merge_base::{merge_base, merge_base_one, is_ancestor};
 pub use commit_graph::{CommitGraph, CommitGraphEntry};
+pub use commit_graph::write::CommitGraphWriter;
 pub use pretty::{format_commit, format_builtin, FormatOptions, BuiltinFormat};
 pub use graph_draw::GraphDrawer;
 pub use objects::list_objects;

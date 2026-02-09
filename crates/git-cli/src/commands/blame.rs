@@ -4,6 +4,7 @@ use std::io::{self, Write};
 use anyhow::Result;
 use bstr::ByteSlice;
 use clap::Args;
+use git_diff::algorithm::{diff_edits, EditOp};
 use git_hash::ObjectId;
 use git_object::{Commit, Object};
 use git_revwalk::RevWalk;
@@ -275,7 +276,7 @@ fn blame_file(
         }
 
         let oid = oid_result?;
-        let obj = repo.odb().read(&oid)?;
+        let obj = repo.odb().read_cached(&oid)?;
         let commit = match obj {
             Some(Object::Commit(c)) => c,
             _ => continue,
@@ -295,8 +296,8 @@ fn blame_file(
             Vec::new()
         };
 
-        // Find lines that changed between parent and this commit
-        let changed_lines = find_changed_lines(&parent_content, &current_content);
+        // Find lines that changed between parent and this commit using diff-based attribution
+        let changed_lines = diff_blame_changed_set(&parent_content, &current_content);
 
         // Attribute unblamed lines that changed in this commit
         let mut newly_blamed = Vec::new();
@@ -373,24 +374,39 @@ fn blame_file(
     Ok(entries)
 }
 
-/// Find which line indices changed between parent and current.
-fn find_changed_lines(parent: &[String], current: &[String]) -> std::collections::HashSet<usize> {
-    let mut changed = std::collections::HashSet::new();
-
-    // Build a set of parent lines for quick lookup
-    let parent_set: std::collections::HashSet<&str> =
-        parent.iter().map(|s| s.as_str()).collect();
-
-    for (i, line) in current.iter().enumerate() {
-        if !parent_set.contains(line.as_str()) {
-            changed.insert(i);
-        }
+/// Compute which line indices in `current` changed compared to `parent`
+/// using the Myers diff algorithm for accurate line-level attribution.
+fn diff_blame_changed_set(
+    parent: &[String],
+    current: &[String],
+) -> std::collections::HashSet<usize> {
+    if parent.is_empty() {
+        // Root commit: all lines are new
+        return (0..current.len()).collect();
     }
 
-    // If parent is empty (root commit), all lines are "changed"
-    if parent.is_empty() {
-        for i in 0..current.len() {
-            changed.insert(i);
+    // Join lines back with newlines for diff_edits (which splits internally)
+    let old_bytes = parent.join("\n");
+    let new_bytes = current.join("\n");
+    let old_bytes = if old_bytes.is_empty() {
+        Vec::new()
+    } else {
+        format!("{}\n", old_bytes).into_bytes()
+    };
+    let new_bytes = if new_bytes.is_empty() {
+        Vec::new()
+    } else {
+        format!("{}\n", new_bytes).into_bytes()
+    };
+
+    let edits = diff_edits(&old_bytes, &new_bytes, git_diff::DiffAlgorithm::Myers);
+
+    // All lines start as changed; mark equal ones as unchanged
+    let mut changed: std::collections::HashSet<usize> = (0..current.len()).collect();
+
+    for edit in &edits {
+        if edit.op == EditOp::Equal && edit.new_index < current.len() {
+            changed.remove(&edit.new_index);
         }
     }
 
@@ -405,7 +421,7 @@ fn read_file_at_rev(
 ) -> Result<Vec<String>> {
     let obj = repo
         .odb()
-        .read(commit_oid)?
+        .read_cached(commit_oid)?
         .ok_or_else(|| anyhow::anyhow!("commit not found: {}", commit_oid))?;
 
     let tree_oid = match obj {
@@ -417,7 +433,7 @@ fn read_file_at_rev(
 
     let blob_obj = repo
         .odb()
-        .read(&blob_oid)?
+        .read_cached(&blob_oid)?
         .ok_or_else(|| anyhow::anyhow!("blob not found: {}", blob_oid))?;
 
     match blob_obj {
@@ -440,7 +456,7 @@ fn resolve_path_in_tree(
     for component in &components {
         let obj = repo
             .odb()
-            .read(&current)?
+            .read_cached(&current)?
             .ok_or_else(|| anyhow::anyhow!("tree not found: {}", current))?;
 
         let tree = match obj {

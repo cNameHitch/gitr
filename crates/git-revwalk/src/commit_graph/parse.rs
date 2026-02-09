@@ -119,6 +119,7 @@ pub(crate) fn open_commit_graph(path: &Path) -> Result<CommitGraph, RevWalkError
     Ok(CommitGraph {
         data,
         num_commits,
+        oid_fanout_offset,
         oid_lookup_offset,
         commit_data_offset,
         extra_edges_offset,
@@ -147,25 +148,34 @@ pub(crate) fn oid_at_position(graph: &CommitGraph, pos: u32) -> Option<ObjectId>
     ObjectId::from_bytes(bytes, algo).ok()
 }
 
-/// Binary search for an OID in the lookup table.
-fn find_oid_position(graph: &CommitGraph, oid: &ObjectId) -> Option<u32> {
+/// Binary search for an OID in the lookup table, accelerated by the fanout table.
+pub(super) fn find_oid_position(graph: &CommitGraph, oid: &ObjectId) -> Option<u32> {
     let hash_bytes = oid.as_bytes();
     let hash_len = graph.hash_len;
+    let first_byte = hash_bytes[0] as usize;
 
-    // Use first byte for fanout narrowing.
-    let _first_byte = hash_bytes[0] as usize;
+    // Read fanout bounds to narrow the binary search range.
+    let lo = if first_byte == 0 {
+        0u32
+    } else {
+        let off = graph.oid_fanout_offset + (first_byte - 1) * 4;
+        u32::from_be_bytes([
+            graph.data[off],
+            graph.data[off + 1],
+            graph.data[off + 2],
+            graph.data[off + 3],
+        ])
+    };
 
-    // Read fanout bounds.
-    // The fanout table is at oid_lookup_offset - 256*4 (actually it's a separate chunk).
-    // We need to find the fanout offset. Since we stored oid_lookup and commit_data,
-    // the fanout is at oid_lookup_offset - (num_commits * hash_len would be after lookup...)
-    // Actually, the fanout table is a separate chunk. We need its offset too.
-    // For now, we do a linear scan of the OID lookup table.
-    // TODO: Use fanout for O(log n) binary search.
+    let hi_off = graph.oid_fanout_offset + first_byte * 4;
+    let mut hi = u32::from_be_bytes([
+        graph.data[hi_off],
+        graph.data[hi_off + 1],
+        graph.data[hi_off + 2],
+        graph.data[hi_off + 3],
+    ]);
 
-    let mut lo: u32 = 0;
-    let mut hi: u32 = graph.num_commits;
-
+    let mut lo = lo;
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
         let offset = graph.oid_lookup_offset + (mid as usize) * hash_len;

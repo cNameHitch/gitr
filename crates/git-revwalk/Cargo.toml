@@ -17,6 +17,7 @@ git-repository = { workspace = true }
 bstr = { workspace = true }
 thiserror = { workspace = true }
 memmap2 = { workspace = true }
+sha1 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
