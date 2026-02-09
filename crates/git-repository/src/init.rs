@@ -72,14 +72,18 @@ pub fn init_repository(path: &Path, options: &InitOptions) -> Result<DiscoveredR
     let config_content = if options.bare {
         "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = true\n".to_string()
     } else {
-        let mut content = String::from(
-            "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n",
-        );
         #[cfg(target_os = "macos")]
         {
-            content.push_str("\tignorecase = true\n\tprecomposeunicode = true\n");
+            String::from(
+                "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n\tignorecase = true\n\tprecomposeunicode = true\n",
+            )
         }
-        content
+        #[cfg(not(target_os = "macos"))]
+        {
+            String::from(
+                "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n",
+            )
+        }
     };
     fs::write(git_dir.join("config"), config_content)?;
 

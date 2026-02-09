@@ -11,24 +11,21 @@ use crate::{ConfigEntry, ConfigKey, ConfigScope};
 
 /// Return platform-specific system config file paths in discovery order.
 fn system_config_paths() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-
     #[cfg(target_os = "macos")]
     {
-        paths.push(PathBuf::from(
-            "/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig",
-        ));
-        paths.push(PathBuf::from(
-            "/Applications/Xcode.app/Contents/Developer/usr/share/git-core/gitconfig",
-        ));
-        paths.push(PathBuf::from("/usr/local/etc/gitconfig"));
-        paths.push(PathBuf::from("/opt/homebrew/etc/gitconfig"));
+        vec![
+            PathBuf::from("/Library/Developer/CommandLineTools/usr/share/git-core/gitconfig"),
+            PathBuf::from("/Applications/Xcode.app/Contents/Developer/usr/share/git-core/gitconfig"),
+            PathBuf::from("/usr/local/etc/gitconfig"),
+            PathBuf::from("/opt/homebrew/etc/gitconfig"),
+            PathBuf::from("/etc/gitconfig"),
+        ]
     }
 
-    // Linux and fallback for all platforms
-    paths.push(PathBuf::from("/etc/gitconfig"));
-
-    paths
+    #[cfg(not(target_os = "macos"))]
+    {
+        vec![PathBuf::from("/etc/gitconfig")]
+    }
 }
 
 /// Merged configuration from all scopes.
