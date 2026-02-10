@@ -1,10 +1,11 @@
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 
 use anyhow::Result;
 use clap::Args;
 use git_hash::ObjectId;
 use git_object::Object;
 use regex::Regex;
+use git_utils::color::{self, ColorConfig, ColorSlot};
 
 use super::open_repo;
 use crate::Cli;
@@ -43,6 +44,10 @@ pub struct GrepArgs {
     #[arg(long)]
     tree: Option<String>,
 
+    /// When to show colored output (auto, always, never)
+    #[arg(long, value_name = "when")]
+    color: Option<String>,
+
     /// Pattern (positional)
     pattern: Option<String>,
 
@@ -70,6 +75,11 @@ pub fn run(args: &GrepArgs, cli: &Cli) -> Result<i32> {
         Regex::new(&pattern_str)?
     };
 
+    let cli_color = args.color.as_deref().map(color::parse_color_mode);
+    let color_config = load_color_config(cli);
+    let effective = color_config.effective_mode("grep", cli_color);
+    let color_on = color::use_color(effective, io::stdout().is_terminal());
+
     let tree_oid = if let Some(ref tree_spec) = args.tree {
         let oid = git_revwalk::resolve_revision(&repo, tree_spec)?;
         get_tree_oid(&repo, &oid)?
@@ -81,7 +91,7 @@ pub fn run(args: &GrepArgs, cli: &Cli) -> Result<i32> {
     };
 
     let mut found = false;
-    grep_tree(&repo, &tree_oid, "", &regex, args, &mut out, &mut found)?;
+    grep_tree(&repo, &tree_oid, "", &regex, args, color_on, &color_config, &mut out, &mut found)?;
 
     Ok(if found { 0 } else { 1 })
 }
@@ -101,12 +111,15 @@ fn get_tree_oid(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn grep_tree(
     repo: &git_repository::Repository,
     tree_oid: &ObjectId,
     prefix: &str,
     regex: &Regex,
     args: &GrepArgs,
+    color_on: bool,
+    cc: &ColorConfig,
     out: &mut impl Write,
     found: &mut bool,
 ) -> Result<()> {
@@ -129,7 +142,7 @@ fn grep_tree(
         };
 
         if entry.mode.is_tree() {
-            grep_tree(repo, &entry.oid, &path, regex, args, out, found)?;
+            grep_tree(repo, &entry.oid, &path, regex, args, color_on, cc, out, found)?;
         } else if entry.mode.is_blob() {
             // Check pathspec filter
             if !args.pathspecs.is_empty() {
@@ -139,19 +152,22 @@ fn grep_tree(
                 }
             }
 
-            grep_blob(repo, &entry.oid, &path, regex, args, out, found)?;
+            grep_blob(repo, &entry.oid, &path, regex, args, color_on, cc, out, found)?;
         }
     }
 
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn grep_blob(
     repo: &git_repository::Repository,
     blob_oid: &ObjectId,
     path: &str,
     regex: &Regex,
     args: &GrepArgs,
+    color_on: bool,
+    cc: &ColorConfig,
     out: &mut impl Write,
     found: &mut bool,
 ) -> Result<()> {
@@ -170,6 +186,11 @@ fn grep_blob(
     let mut match_count = 0u32;
     let mut file_matched = false;
 
+    let reset = if color_on { cc.get_color(ColorSlot::Reset) } else { "" };
+    let filename_color = if color_on { cc.get_color(ColorSlot::GrepFilename) } else { "" };
+    let linenum_color = if color_on { cc.get_color(ColorSlot::GrepLineNumber) } else { "" };
+    let sep_color = if color_on { cc.get_color(ColorSlot::GrepSeparator) } else { "" };
+
     for (line_num, line) in content.lines().enumerate() {
         let matches = regex.is_match(line);
         let show = if args.invert_match { !matches } else { matches };
@@ -185,18 +206,68 @@ fn grep_blob(
             }
 
             if !args.count {
-                if args.line_number {
-                    writeln!(out, "{}:{}:{}", path, line_num + 1, line)?;
+                let colored_content = if color_on && !args.invert_match {
+                    highlight_matches(line, regex, cc)
                 } else {
-                    writeln!(out, "{}:{}", path, line)?;
+                    line.to_string()
+                };
+
+                if args.line_number {
+                    writeln!(
+                        out,
+                        "{}{}{}{}:{}{}{}{}{}:{}{}",
+                        filename_color, path, reset,
+                        sep_color, reset,
+                        linenum_color, line_num + 1, reset,
+                        sep_color, reset,
+                        colored_content,
+                    )?;
+                } else {
+                    writeln!(
+                        out,
+                        "{}{}{}{}:{}{}",
+                        filename_color, path, reset,
+                        sep_color, reset,
+                        colored_content,
+                    )?;
                 }
             }
         }
     }
 
     if args.count && file_matched {
-        writeln!(out, "{}:{}", path, match_count)?;
+        writeln!(
+            out,
+            "{}{}{}{}:{}{}",
+            filename_color, path, reset,
+            sep_color, reset,
+            match_count,
+        )?;
     }
 
     Ok(())
+}
+
+fn highlight_matches(text: &str, regex: &Regex, cc: &ColorConfig) -> String {
+    let match_color = cc.get_color(ColorSlot::GrepMatch);
+    let reset = cc.get_color(ColorSlot::Reset);
+    regex
+        .replace_all(text, |caps: &regex::Captures| {
+            format!("{}{}{}", match_color, &caps[0], reset)
+        })
+        .into_owned()
+}
+
+fn load_color_config(cli: &Cli) -> ColorConfig {
+    let config = if let Some(ref git_dir) = cli.git_dir {
+        git_config::ConfigSet::load(Some(git_dir)).ok()
+    } else {
+        git_repository::Repository::discover(".")
+            .ok()
+            .and_then(|repo| git_config::ConfigSet::load(Some(repo.git_dir())).ok())
+    };
+    match config {
+        Some(c) => ColorConfig::from_config(|key| c.get_string(key).ok().flatten()),
+        None => ColorConfig::new(),
+    }
 }

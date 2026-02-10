@@ -1,8 +1,11 @@
 //! Repository discovery, initialization, and central access for all git subsystems.
 
 mod discover;
+pub mod editor;
 mod env;
 mod error;
+pub mod gpg;
+pub mod hooks;
 mod init;
 mod worktree;
 

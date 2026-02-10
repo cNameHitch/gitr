@@ -18,6 +18,14 @@ use crate::ProtocolError;
 pub struct FetchOptions {
     /// Shallow fetch depth (None = full).
     pub depth: Option<u32>,
+    /// Deepen a shallow clone by N additional commits.
+    pub deepen: Option<u32>,
+    /// Convert a shallow repository to a complete one.
+    pub unshallow: bool,
+    /// Create a shallow clone with commits newer than this date (ISO 8601 or unix timestamp).
+    pub shallow_since: Option<String>,
+    /// Exclude commits reachable from a specific revision.
+    pub shallow_exclude: Option<String>,
     /// Partial clone filter (e.g., "blob:none").
     pub filter: Option<String>,
     /// Show progress output.
@@ -28,6 +36,10 @@ impl Default for FetchOptions {
     fn default() -> Self {
         Self {
             depth: None,
+            deepen: None,
+            unshallow: false,
+            shallow_since: None,
+            shallow_exclude: None,
             filter: None,
             progress: true,
         }
@@ -43,6 +55,10 @@ pub struct FetchResult {
     pub ref_updates: Vec<(String, ObjectId)>,
     /// Number of new objects received.
     pub new_objects: usize,
+    /// Shallow boundary commits (OIDs listed in "shallow" lines from the server).
+    pub shallow_commits: Vec<ObjectId>,
+    /// Commits that are no longer shallow boundaries ("unshallow" lines from the server).
+    pub unshallow_commits: Vec<ObjectId>,
 }
 
 /// Perform a fetch operation using an already-connected transport.
@@ -55,7 +71,7 @@ pub fn fetch(
     server_caps: &Capabilities,
     local_refs: &[(ObjectId, String)],
     wanted_refs: &[String],
-    _options: &FetchOptions,
+    options: &FetchOptions,
     pack_dir: Option<&std::path::Path>,
 ) -> Result<FetchResult, ProtocolError> {
     // Determine which OIDs we want
@@ -66,17 +82,38 @@ pub fn fetch(
             pack_path: None,
             ref_updates: Vec::new(),
             new_objects: 0,
+            shallow_commits: Vec::new(),
+            unshallow_commits: Vec::new(),
         });
     }
 
     // Determine which OIDs we already have (for negotiation)
     let haves: Vec<ObjectId> = local_refs.iter().map(|(oid, _)| *oid).collect();
 
-    // Select client capabilities
-    let client_caps = capability::negotiate_fetch_capabilities(server_caps);
+    // Select client capabilities — include shallow-related capabilities if needed
+    let mut client_caps = capability::negotiate_fetch_capabilities(server_caps);
+    let is_shallow_request = options.depth.is_some()
+        || options.deepen.is_some()
+        || options.unshallow
+        || options.shallow_since.is_some()
+        || options.shallow_exclude.is_some();
+
+    if is_shallow_request && server_caps.has("shallow") && !client_caps.iter().any(|c| c == "shallow") {
+        client_caps.push("shallow".into());
+    }
+    if options.shallow_since.is_some() && server_caps.has("deepen-since") && !client_caps.iter().any(|c| c == "deepen-since") {
+        client_caps.push("deepen-since".into());
+    }
+    if options.shallow_exclude.is_some() && server_caps.has("deepen-not") && !client_caps.iter().any(|c| c == "deepen-not") {
+        client_caps.push("deepen-not".into());
+    }
+    if (options.deepen.is_some() || options.unshallow) && server_caps.has("deepen-relative") && !client_caps.iter().any(|c| c == "deepen-relative") {
+        client_caps.push("deepen-relative".into());
+    }
+
     let sideband_mode = capability::select_sideband(server_caps);
 
-    // Send wants and haves (write phase)
+    // Send wants, shallow commands, and haves (write phase)
     {
         let writer = transport.writer();
         let mut pkt_writer = PktLineWriter::new(writer);
@@ -90,6 +127,25 @@ pub fn fetch(
                 pkt_writer.write_text(&format!("want {}", want))?;
             }
         }
+
+        // Send shallow negotiation lines (before flush, after wants)
+        if let Some(depth) = options.depth {
+            pkt_writer.write_text(&format!("deepen {}", depth))?;
+        }
+        if let Some(deepen) = options.deepen {
+            pkt_writer.write_text(&format!("deepen {}", deepen))?;
+        }
+        if options.unshallow {
+            // Unshallow: request infinite depth to convert shallow to full
+            pkt_writer.write_text(&format!("deepen {}", 0x7fffffff_u32))?;
+        }
+        if let Some(ref since) = options.shallow_since {
+            pkt_writer.write_text(&format!("deepen-since {}", since))?;
+        }
+        if let Some(ref exclude) = options.shallow_exclude {
+            pkt_writer.write_text(&format!("deepen-not {}", exclude))?;
+        }
+
         pkt_writer.write_flush()?;
 
         // Send have lines
@@ -102,11 +158,10 @@ pub fn fetch(
         pkt_writer.flush()?;
     }
 
-    // Read ACK/NAK response (read phase)
-    // In simple (non-multi_ack) protocol:
-    // - Server sends NAK if no common objects, then pack data
-    // - Server sends ACK <oid> if common objects, then NAK, then pack data
-    // We consume all ACK/NAK lines until we see NAK or flush.
+    // Read shallow/unshallow and ACK/NAK response (read phase)
+    // The server may send "shallow <oid>" and "unshallow <oid>" lines before ACK/NAK.
+    let mut shallow_commits = Vec::new();
+    let mut unshallow_commits = Vec::new();
     {
         let reader = transport.reader();
         let mut pkt_reader = PktLineReader::new(reader);
@@ -119,11 +174,23 @@ pub fn fetch(
                     if line == "NAK" {
                         break;
                     }
-                    // ACK line — continue reading until NAK
+                    if let Some(hex) = line.strip_prefix("shallow ") {
+                        if let Ok(oid) = ObjectId::from_hex(hex.trim()) {
+                            shallow_commits.push(oid);
+                        }
+                        continue;
+                    }
+                    if let Some(hex) = line.strip_prefix("unshallow ") {
+                        if let Ok(oid) = ObjectId::from_hex(hex.trim()) {
+                            unshallow_commits.push(oid);
+                        }
+                        continue;
+                    }
+                    // ACK line -- continue reading until NAK
                     if line.starts_with("ACK ") {
                         continue;
                     }
-                    // Unknown response — just break
+                    // Unknown response -- just break
                     break;
                 }
                 crate::pktline::PktLine::Flush => break,
@@ -139,6 +206,8 @@ pub fn fetch(
         pack_path: None,
         ref_updates: Vec::new(),
         new_objects: 0,
+        shallow_commits,
+        unshallow_commits,
     };
 
     if !pack_data.is_empty() {

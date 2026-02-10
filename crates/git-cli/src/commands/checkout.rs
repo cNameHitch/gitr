@@ -26,6 +26,38 @@ pub struct CheckoutArgs {
     #[arg(short, long)]
     force: bool,
 
+    /// Suppress feedback messages
+    #[arg(short, long)]
+    quiet: bool,
+
+    /// Merge local changes when switching
+    #[arg(short, long)]
+    merge: bool,
+
+    /// Conflict style (merge or diff3)
+    #[arg(long, value_name = "style")]
+    conflict: Option<String>,
+
+    /// During a merge, checkout our side
+    #[arg(long)]
+    ours: bool,
+
+    /// During a merge, checkout their side
+    #[arg(long)]
+    theirs: bool,
+
+    /// Set up tracking for a new branch
+    #[arg(short = 't', long)]
+    track: bool,
+
+    /// Create an orphan branch
+    #[arg(long, value_name = "new-branch")]
+    orphan: Option<String>,
+
+    /// Interactive patch selection (stub)
+    #[arg(short = 'p', long)]
+    patch: bool,
+
     /// Target branch, commit, or file
     target: Option<String>,
 
@@ -52,6 +84,14 @@ pub fn run(args: &CheckoutArgs, cli: &Cli) -> Result<i32> {
             force_create: None,
             detach: false,
             force: args.force,
+            guess: true,
+            no_guess: false,
+            quiet: args.quiet,
+            merge: args.merge,
+            conflict: args.conflict.clone(),
+            orphan: None,
+            track: None,
+            no_track: false,
             target: args.target.clone(),
         };
         return switch::run(&switch_args, cli);
@@ -63,6 +103,14 @@ pub fn run(args: &CheckoutArgs, cli: &Cli) -> Result<i32> {
             force_create: Some(new_branch.clone()),
             detach: false,
             force: args.force,
+            guess: true,
+            no_guess: false,
+            quiet: args.quiet,
+            merge: args.merge,
+            conflict: args.conflict.clone(),
+            orphan: None,
+            track: None,
+            no_track: false,
             target: args.target.clone(),
         };
         return switch::run(&switch_args, cli);
@@ -90,6 +138,14 @@ pub fn run(args: &CheckoutArgs, cli: &Cli) -> Result<i32> {
                 force_create: None,
                 detach: args.detach,
                 force: args.force,
+                guess: true,
+                no_guess: false,
+                quiet: args.quiet,
+                merge: args.merge,
+                conflict: args.conflict.clone(),
+                orphan: None,
+                track: None,
+                no_track: false,
                 target: Some(target.clone()),
             };
             return switch::run(&switch_args, cli);
@@ -104,6 +160,14 @@ pub fn run(args: &CheckoutArgs, cli: &Cli) -> Result<i32> {
                 force_create: None,
                 detach: args.detach,
                 force: args.force,
+                guess: true,
+                no_guess: false,
+                quiet: args.quiet,
+                merge: args.merge,
+                conflict: args.conflict.clone(),
+                orphan: None,
+                track: None,
+                no_track: false,
                 target: Some(target.clone()),
             };
             return switch::run(&switch_args, cli);
@@ -114,6 +178,14 @@ pub fn run(args: &CheckoutArgs, cli: &Cli) -> Result<i32> {
                 force_create: None,
                 detach: true,
                 force: args.force,
+                guess: true,
+                no_guess: false,
+                quiet: args.quiet,
+                merge: args.merge,
+                conflict: args.conflict.clone(),
+                orphan: None,
+                track: None,
+                no_track: false,
                 target: Some(target.clone()),
             };
             match switch::run(&switch_args, cli) {

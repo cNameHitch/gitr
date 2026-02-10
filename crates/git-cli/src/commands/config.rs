@@ -1,4 +1,5 @@
 use std::io::{self, Write};
+use std::path::PathBuf;
 
 use anyhow::Result;
 use bstr::ByteSlice;
@@ -32,6 +33,74 @@ pub struct ConfigArgs {
     /// Remove a configuration entry
     #[arg(long)]
     unset: bool,
+
+    /// Use system-wide config file
+    #[arg(long)]
+    system: bool,
+
+    /// Use given config file
+    #[arg(short = 'f', long = "file", value_name = "config-file")]
+    file: Option<PathBuf>,
+
+    /// Get all values for a multi-valued key
+    #[arg(long)]
+    get_all: bool,
+
+    /// Get values matching a regex
+    #[arg(long)]
+    get_regexp: bool,
+
+    /// Replace all matching lines for a multi-valued key
+    #[arg(long)]
+    replace_all: bool,
+
+    /// Add a new value without altering existing ones
+    #[arg(long)]
+    add: bool,
+
+    /// Remove all matching lines for a multi-valued key
+    #[arg(long)]
+    unset_all: bool,
+
+    /// Rename a section
+    #[arg(long)]
+    rename_section: bool,
+
+    /// Remove a section
+    #[arg(long)]
+    remove_section: bool,
+
+    /// Open config in editor
+    #[arg(short = 'e', long)]
+    edit: bool,
+
+    /// Ensure value matches a given type
+    #[arg(long = "type", value_name = "type")]
+    value_type: Option<String>,
+
+    /// Type-check: value is "true" or "false"
+    #[arg(long = "bool")]
+    bool_type: bool,
+
+    /// Type-check: value is a decimal number
+    #[arg(long = "int")]
+    int_type: bool,
+
+    /// Type-check: value is a path
+    #[arg(long = "path")]
+    path_type: bool,
+
+    /// Terminate values with NUL byte
+    #[arg(short = 'z')]
+    null_terminate: bool,
+
+    /// Show only variable names
+    #[arg(long)]
+    name_only: bool,
+
+    /// Respect include directives
+    #[arg(long)]
+    includes: bool,
 
     /// Configuration key (e.g., remote.origin.url)
     key: Option<String>,

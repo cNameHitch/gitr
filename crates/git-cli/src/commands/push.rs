@@ -59,6 +59,30 @@ pub struct PushArgs {
     #[arg(long)]
     progress: bool,
 
+    /// Push all branches
+    #[arg(long)]
+    all: bool,
+
+    /// Mirror all refs
+    #[arg(long)]
+    mirror: bool,
+
+    /// Use thin pack transfer
+    #[arg(long)]
+    thin: bool,
+
+    /// Don't use thin pack transfer
+    #[arg(long)]
+    no_thin: bool,
+
+    /// GPG sign the push
+    #[arg(long, value_name = "mode")]
+    signed: Option<String>,
+
+    /// Recurse into submodules
+    #[arg(long, value_name = "check|on-demand|only|no")]
+    recurse_submodules: Option<String>,
+
     /// Remote name
     remote: Option<String>,
 

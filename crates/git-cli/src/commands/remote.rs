@@ -43,6 +43,55 @@ pub enum RemoteSubcommand {
     Show {
         name: String,
     },
+    /// Set the default branch (HEAD) for a remote
+    #[command(name = "set-head")]
+    SetHead {
+        name: String,
+        /// Branch to set as HEAD
+        branch: Option<String>,
+        /// Determine remote HEAD automatically
+        #[arg(short, long)]
+        auto: bool,
+        /// Delete the remote HEAD reference
+        #[arg(short, long)]
+        delete: bool,
+    },
+    /// Remove stale remote-tracking branches
+    Prune {
+        name: String,
+        /// Report what would be pruned without actually doing it
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+    },
+    /// Fetch updates for remote groups
+    Update {
+        /// Remote group to update
+        group: Option<String>,
+        /// Prune stale branches during update
+        #[arg(short, long)]
+        prune: bool,
+    },
+    /// Change the list of branches tracked by a remote
+    #[command(name = "set-branches")]
+    SetBranches {
+        name: String,
+        /// Branches to track
+        branches: Vec<String>,
+        /// Add to existing tracked branches instead of replacing
+        #[arg(long)]
+        add: bool,
+    },
+    /// Show URLs for a remote
+    #[command(name = "get-url")]
+    GetUrl {
+        name: String,
+        /// Show push URL instead of fetch URL
+        #[arg(long)]
+        push: bool,
+        /// Show all URLs
+        #[arg(long)]
+        all: bool,
+    },
 }
 
 pub fn run(args: &RemoteArgs, cli: &Cli) -> Result<i32> {
@@ -69,6 +118,26 @@ pub fn run(args: &RemoteArgs, cli: &Cli) -> Result<i32> {
         }
         Some(RemoteSubcommand::Show { name }) => {
             show_remote(&repo, name, &mut out)?;
+        }
+        Some(RemoteSubcommand::SetHead { name, branch: _, auto: _, delete: _ }) => {
+            // Stub: accept the command for flag parity
+            eprintln!("gitr: remote set-head for '{}' is not yet implemented", name);
+        }
+        Some(RemoteSubcommand::Prune { name, dry_run: _ }) => {
+            // Stub: accept the command for flag parity
+            eprintln!("gitr: remote prune for '{}' is not yet implemented", name);
+        }
+        Some(RemoteSubcommand::Update { group: _, prune: _ }) => {
+            // Stub: accept the command for flag parity
+            eprintln!("gitr: remote update is not yet implemented");
+        }
+        Some(RemoteSubcommand::SetBranches { name, branches: _, add: _ }) => {
+            // Stub: accept the command for flag parity
+            eprintln!("gitr: remote set-branches for '{}' is not yet implemented", name);
+        }
+        Some(RemoteSubcommand::GetUrl { name, push: _, all: _ }) => {
+            // Stub: accept the command for flag parity
+            eprintln!("gitr: remote get-url for '{}' is not yet implemented", name);
         }
     }
 

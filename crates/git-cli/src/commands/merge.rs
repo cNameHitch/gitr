@@ -6,7 +6,7 @@ use bstr::{BString, ByteSlice, ByteVec};
 use clap::Args;
 use git_hash::ObjectId;
 use git_index::{EntryFlags, Index, IndexEntry, Stage, StatData};
-use git_merge::{MergeOptions, ConflictEntry};
+use git_merge::{ConflictStyle, MergeOptions, MergeStrategyType, ConflictEntry};
 use git_object::{Commit, FileMode, Object};
 use git_ref::{RefName, RefStore};
 use git_ref::reflog::{ReflogEntry, append_reflog_entry};
@@ -49,6 +49,50 @@ pub struct MergeArgs {
     /// Merge commit message
     #[arg(short = 'm')]
     pub message: Option<String>,
+
+    /// Merge strategy to use
+    #[arg(short = 's', long = "strategy")]
+    pub strategy: Option<String>,
+
+    /// Pass option to the merge strategy
+    #[arg(short = 'X', long = "strategy-option")]
+    pub strategy_option: Vec<String>,
+
+    /// Be verbose
+    #[arg(short = 'v', long)]
+    pub verbose: bool,
+
+    /// Be quiet
+    #[arg(short, long)]
+    pub quiet: bool,
+
+    /// Show diffstat at end of merge
+    #[arg(long)]
+    pub stat: bool,
+
+    /// Do not show diffstat at end of merge
+    #[arg(long)]
+    pub no_stat: bool,
+
+    /// Open an editor for the merge message
+    #[arg(short = 'e', long)]
+    pub edit: bool,
+
+    /// Allow merging unrelated histories
+    #[arg(long)]
+    pub allow_unrelated_histories: bool,
+
+    /// Add Signed-off-by trailer
+    #[arg(long)]
+    pub signoff: bool,
+
+    /// Run pre-merge and commit-msg hooks
+    #[arg(long)]
+    pub verify: bool,
+
+    /// Bypass pre-merge and commit-msg hooks
+    #[arg(long)]
+    pub no_verify: bool,
 
     /// Branch or commit to merge
     #[arg(required_unless_present_any = ["abort", "continue"])]
@@ -181,7 +225,7 @@ pub fn run(args: &MergeArgs, cli: &Cli) -> Result<i32> {
 
     // Run the merge strategy
     let base = base_oid.unwrap_or(ObjectId::NULL_SHA1);
-    let options = MergeOptions::default();
+    let options = build_merge_options(args, &repo)?;
     let merge_result = git_merge::strategy::dispatch_merge(
         &mut repo,
         &head_oid,
@@ -230,12 +274,13 @@ pub fn run(args: &MergeArgs, cli: &Cli) -> Result<i32> {
 
         // Write reflog entry for HEAD
         {
+            let strategy_name = options.strategy.name();
             let sig = get_signature("GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_COMMITTER_DATE", &repo)?;
             let entry = ReflogEntry {
                 old_oid: head_oid,
                 new_oid: commit_oid,
                 identity: sig,
-                message: BString::from(format!("merge {}: Merge made by the 'ort' strategy.", theirs_label)),
+                message: BString::from(format!("merge {}: Merge made by the '{}' strategy.", theirs_label, strategy_name)),
             };
             let head_ref = RefName::new(BString::from("HEAD"))?;
             append_reflog_entry(repo.git_dir(), &head_ref, &entry)?;
@@ -246,7 +291,8 @@ pub fn run(args: &MergeArgs, cli: &Cli) -> Result<i32> {
 
         writeln!(
             err,
-            "Merge made by the 'ort' strategy."
+            "Merge made by the '{}' strategy.",
+            options.strategy.name()
         )?;
 
         // Show diffstat
@@ -290,6 +336,45 @@ pub fn run(args: &MergeArgs, cli: &Cli) -> Result<i32> {
     )?;
 
     Ok(1)
+}
+
+/// Build MergeOptions from CLI args and repository config.
+///
+/// Strategy selection priority: `--strategy` flag > `merge.strategy` config > default (ort).
+/// Conflict style priority: `merge.conflictStyle` config > default (merge).
+/// Strategy options: `-X` flags are passed through directly.
+fn build_merge_options(args: &MergeArgs, repo: &git_repository::Repository) -> Result<MergeOptions> {
+    let mut options = MergeOptions::default();
+
+    // Resolve merge strategy: CLI flag takes precedence over config.
+    if let Some(ref strategy_name) = args.strategy {
+        match MergeStrategyType::from_name(strategy_name) {
+            Some(st) => options.strategy = st,
+            None => bail!(
+                "Could not find merge strategy '{}'.\nAvailable strategies are: ort, recursive, ours, subtree, octopus.",
+                strategy_name
+            ),
+        }
+    } else if let Some(config_strategy) = repo.config().get_string("merge.strategy")?.as_deref() {
+        if let Some(st) = MergeStrategyType::from_name(config_strategy) {
+            options.strategy = st;
+        }
+    }
+
+    // Pass through -X / --strategy-option values.
+    options.strategy_options = args.strategy_option.clone();
+
+    // Read merge.conflictStyle from config.
+    if let Some(style_name) = repo.config().get_string("merge.conflictStyle")?.as_deref() {
+        if let Some(style) = ConflictStyle::from_name(style_name) {
+            options.conflict_style = style;
+        }
+    }
+
+    // Allow unrelated histories flag.
+    options.allow_unrelated_histories = args.allow_unrelated_histories;
+
+    Ok(options)
 }
 
 /// Handle `git merge --abort`: reset to ORIG_HEAD.
@@ -380,7 +465,15 @@ fn handle_continue(
     // Clean up merge state files
     cleanup_merge_state(repo)?;
 
-    writeln!(out, "Merge made by the 'ort' strategy.")?;
+    // Determine strategy name from config for the status message.
+    let strategy_name = repo.config()
+        .get_string("merge.strategy")
+        .ok()
+        .flatten()
+        .and_then(|s| MergeStrategyType::from_name(&s))
+        .unwrap_or(MergeStrategyType::Ort)
+        .name();
+    writeln!(out, "Merge made by the '{}' strategy.", strategy_name)?;
     Ok(0)
 }
 

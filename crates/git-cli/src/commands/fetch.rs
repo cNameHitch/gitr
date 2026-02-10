@@ -33,6 +33,46 @@ pub struct FetchArgs {
     #[arg(short, long)]
     pub quiet: bool,
 
+    /// Be verbose
+    #[arg(short, long)]
+    pub verbose: bool,
+
+    /// Force update of local refs
+    #[arg(short, long)]
+    pub force: bool,
+
+    /// Perform a dry run without making changes
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Number of parallel children for fetching submodules
+    #[arg(short, long)]
+    pub jobs: Option<u32>,
+
+    /// Fetch commits newer than a specific date
+    #[arg(long, value_name = "date")]
+    pub shallow_since: Option<String>,
+
+    /// Exclude commits reachable from a specific revision
+    #[arg(long, value_name = "revision")]
+    pub shallow_exclude: Option<String>,
+
+    /// Convert a shallow repository to a complete one
+    #[arg(long)]
+    pub unshallow: bool,
+
+    /// Deepen a shallow clone by N commits
+    #[arg(long)]
+    pub deepen: Option<u32>,
+
+    /// Fetch submodules recursively
+    #[arg(long)]
+    pub recurse_submodules: bool,
+
+    /// Set upstream tracking reference
+    #[arg(long)]
+    pub set_upstream: bool,
+
     /// Remote name
     pub remote: Option<String>,
 
@@ -96,6 +136,10 @@ pub fn run(args: &FetchArgs, cli: &Cli) -> Result<i32> {
 
     let fetch_opts = git_protocol::fetch::FetchOptions {
         depth: args.depth,
+        deepen: args.deepen,
+        unshallow: args.unshallow,
+        shallow_since: args.shallow_since.clone(),
+        shallow_exclude: args.shallow_exclude.clone(),
         filter: None,
         progress: !args.quiet,
     };

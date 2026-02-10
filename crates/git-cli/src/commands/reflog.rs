@@ -2,7 +2,7 @@ use std::io::{self, Write};
 
 use anyhow::Result;
 use bstr::BString;
-use clap::Args;
+use clap::{Args, Subcommand};
 use git_ref::reflog::read_reflog;
 use git_ref::RefName;
 use git_utils::date::DateFormat;
@@ -12,15 +12,45 @@ use crate::Cli;
 
 #[derive(Args)]
 pub struct ReflogArgs {
-    /// Subcommand (show, expire, delete). Default: show
-    subcommand: Option<String>,
+    #[command(subcommand)]
+    command: Option<ReflogSubcommand>,
+}
 
-    /// Ref name (defaults to HEAD)
-    #[arg(long, value_name = "ref")]
-    ref_name: Option<String>,
+#[derive(Subcommand)]
+pub enum ReflogSubcommand {
+    /// Show reflog entries
+    Show {
+        /// Ref name (defaults to HEAD)
+        ref_name: Option<String>,
 
-    /// Additional arguments
-    args: Vec<String>,
+        /// Date format for reflog entries
+        #[arg(long)]
+        date: Option<String>,
+    },
+    /// Expire old reflog entries
+    Expire {
+        /// Expire entries older than this time
+        #[arg(long)]
+        expire: Option<String>,
+
+        /// Expire unreachable entries older than this time
+        #[arg(long)]
+        expire_unreachable: Option<String>,
+
+        /// Process reflogs for all refs
+        #[arg(long)]
+        all: bool,
+    },
+    /// Delete a specific reflog entry
+    Delete {
+        /// Reflog entry to delete (e.g., HEAD@{2})
+        ref_entry: String,
+    },
+    /// Check whether a ref has a reflog
+    Exists {
+        /// Ref name to check
+        ref_name: String,
+    },
 }
 
 pub fn run(args: &ReflogArgs, cli: &Cli) -> Result<i32> {
@@ -28,34 +58,25 @@ pub fn run(args: &ReflogArgs, cli: &Cli) -> Result<i32> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
-    let subcmd = args.subcommand.as_deref().unwrap_or("show");
-
-    match subcmd {
-        "show" => reflog_show(&repo, args, &mut out),
-        "expire" => reflog_expire(&repo, args, &mut out),
-        "delete" => reflog_delete(&repo, args, &mut out),
-        // If the "subcommand" is actually a ref name, treat as show
-        other => {
-            let ref_name = other;
-            reflog_show_ref(&repo, ref_name, &mut out)
+    match &args.command {
+        None => {
+            // Default: show HEAD reflog
+            reflog_show_ref(&repo, "HEAD", &mut out)
+        }
+        Some(ReflogSubcommand::Show { ref_name, date: _ }) => {
+            let ref_str = ref_name.as_deref().unwrap_or("HEAD");
+            reflog_show_ref(&repo, ref_str, &mut out)
+        }
+        Some(ReflogSubcommand::Expire { .. }) => {
+            reflog_expire(&repo, &mut out)
+        }
+        Some(ReflogSubcommand::Delete { ref_entry: _ }) => {
+            reflog_delete(&repo, &mut out)
+        }
+        Some(ReflogSubcommand::Exists { ref_name }) => {
+            reflog_exists(&repo, ref_name)
         }
     }
-}
-
-fn reflog_show(
-    repo: &git_repository::Repository,
-    args: &ReflogArgs,
-    out: &mut impl Write,
-) -> Result<i32> {
-    let ref_str = if !args.args.is_empty() {
-        args.args[0].as_str()
-    } else if let Some(ref name) = args.ref_name {
-        name.as_str()
-    } else {
-        "HEAD"
-    };
-
-    reflog_show_ref(repo, ref_str, out)
 }
 
 fn reflog_show_ref(
@@ -90,7 +111,6 @@ fn reflog_show_ref(
 
 fn reflog_expire(
     _repo: &git_repository::Repository,
-    _args: &ReflogArgs,
     out: &mut impl Write,
 ) -> Result<i32> {
     // Expire old reflog entries (simplified: not implemented yet)
@@ -100,12 +120,24 @@ fn reflog_expire(
 
 fn reflog_delete(
     _repo: &git_repository::Repository,
-    _args: &ReflogArgs,
     out: &mut impl Write,
 ) -> Result<i32> {
     // Delete specific reflog entries (simplified: not implemented yet)
     writeln!(out, "reflog delete: not yet implemented")?;
     Ok(0)
+}
+
+fn reflog_exists(
+    repo: &git_repository::Repository,
+    ref_name: &str,
+) -> Result<i32> {
+    let rn = resolve_reflog_name(ref_name)?;
+    let reflog_path = repo.git_dir().join("logs").join(rn.as_str());
+    if reflog_path.exists() {
+        Ok(0)
+    } else {
+        Ok(1)
+    }
 }
 
 fn resolve_reflog_name(name: &str) -> Result<RefName> {

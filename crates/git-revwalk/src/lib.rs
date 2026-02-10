@@ -15,16 +15,18 @@ mod pretty;
 mod graph_draw;
 mod objects;
 mod filter;
+pub mod cherry;
 
 pub use walk::{RevWalk, SortOrder, WalkOptions};
 pub use range::{RevisionRange, resolve_revision};
-pub use merge_base::{merge_base, merge_base_one, is_ancestor};
+pub use merge_base::{merge_base, merge_base_one, merge_base_octopus, fork_point, is_ancestor};
 pub use commit_graph::{CommitGraph, CommitGraphEntry};
 pub use commit_graph::write::CommitGraphWriter;
 pub use pretty::{format_commit, format_commit_with_decorations, format_builtin, format_builtin_with_decorations, FormatOptions, BuiltinFormat};
 pub use graph_draw::GraphDrawer;
 pub use objects::list_objects;
 pub use filter::ObjectFilter;
+pub use cherry::{cherry, CherryEntry};
 
 use git_hash::ObjectId;
 

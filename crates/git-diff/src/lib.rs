@@ -6,8 +6,11 @@
 
 pub mod algorithm;
 pub mod binary;
+pub mod color;
 pub mod diffcore;
+pub mod driver;
 pub mod format;
+pub mod pickaxe;
 pub mod rename;
 pub mod tree;
 pub mod worktree;

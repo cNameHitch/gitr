@@ -249,3 +249,38 @@ fn read_commit(
         _ => Err(RevWalkError::NotACommit(*oid)),
     }
 }
+
+/// Find merge bases for an octopus merge (3+ commits).
+/// Returns the single best common ancestor across all inputs.
+pub fn merge_base_octopus(
+    repo: &Repository,
+    commits: &[ObjectId],
+) -> Result<Option<ObjectId>, RevWalkError> {
+    if commits.is_empty() {
+        return Ok(None);
+    }
+    if commits.len() == 1 {
+        return Ok(Some(commits[0]));
+    }
+
+    let mut result = commits[0];
+    for commit in &commits[1..] {
+        match merge_base_one(repo, &result, commit)? {
+            Some(base) => result = base,
+            None => return Ok(None),
+        }
+    }
+    Ok(Some(result))
+}
+
+/// Find the fork point between a branch and its upstream.
+/// This finds the best merge base between the branch tip and the reflog
+/// entries of the upstream ref.
+pub fn fork_point(
+    repo: &Repository,
+    branch_tip: &ObjectId,
+    upstream_tip: &ObjectId,
+) -> Result<Option<ObjectId>, RevWalkError> {
+    // Simple implementation: just find the merge base
+    merge_base_one(repo, branch_tip, upstream_tip)
+}

@@ -32,6 +32,10 @@ pub struct GcArgs {
     /// Also pack refs
     #[arg(long)]
     keep_largest_pack: bool,
+
+    /// Generate cruft packs
+    #[arg(long)]
+    cruft: bool,
 }
 
 pub fn run(args: &GcArgs, cli: &Cli) -> Result<i32> {

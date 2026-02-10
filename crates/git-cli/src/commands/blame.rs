@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 
 use anyhow::Result;
 use bstr::ByteSlice;
@@ -8,6 +8,7 @@ use git_diff::algorithm::{diff_edits, EditOp};
 use git_hash::ObjectId;
 use git_object::{Commit, Object};
 use git_revwalk::RevWalk;
+use git_utils::color::ColorConfig;
 use git_utils::date::DateFormat;
 
 use super::open_repo;
@@ -43,6 +44,66 @@ pub struct BlameArgs {
     #[arg(long, value_name = "rev")]
     rev: Option<String>,
 
+    /// When to show colored output (auto, always, never)
+    #[arg(long, value_name = "when")]
+    color: Option<String>,
+
+    /// Show blank SHA-1 for boundary commits
+    #[arg(short = 'b')]
+    blank_boundary: bool,
+
+    /// Show results for even root commits
+    #[arg(long)]
+    root: bool,
+
+    /// Show the filename in the original commit
+    #[arg(short = 'f', long)]
+    show_name: bool,
+
+    /// Show per-line porcelain format
+    #[arg(long)]
+    line_porcelain: bool,
+
+    /// Use score-based output format
+    #[arg(short = 'c')]
+    score_output: bool,
+
+    /// Show raw timestamp
+    #[arg(short = 't')]
+    raw_timestamp: bool,
+
+    /// Show long revision
+    #[arg(short = 'l')]
+    long_rev: bool,
+
+    /// Suppress author name
+    #[arg(short = 's')]
+    suppress_author: bool,
+
+    /// Show incremental blame results
+    #[arg(long)]
+    incremental: bool,
+
+    /// Detect moved lines within a file
+    #[arg(short = 'M', num_args = 0..=1, default_missing_value = "20")]
+    detect_moves: Option<u32>,
+
+    /// Detect lines copied from other files (with optional threshold)
+    #[arg(short = 'C', num_args = 0..=1, default_missing_value = "40")]
+    detect_copies_threshold: Option<u32>,
+
+    /// Ignore revision for blame
+    #[arg(long = "ignore-rev")]
+    ignore_rev: Vec<String>,
+
+    /// File listing revisions to ignore for blame
+    #[arg(long = "ignore-revs-file")]
+    ignore_revs_file: Vec<String>,
+
+    /// Apply mailmap transformations
+    #[arg(long)]
+    use_mailmap: bool,
+
     /// File to blame
     file: String,
 }
@@ -59,6 +120,12 @@ pub fn run(args: &BlameArgs, cli: &Cli) -> Result<i32> {
     let repo = open_repo(cli)?;
     let stdout = io::stdout();
     let mut out = stdout.lock();
+
+    // Determine color settings
+    let color_config = load_color_config(&repo);
+    let cli_color = args.color.as_deref().map(git_utils::color::parse_color_mode);
+    let effective = color_config.effective_mode("blame", cli_color);
+    let color_on = git_utils::color::use_color(effective, io::stdout().is_terminal());
 
     // Resolve starting revision
     let start_oid = if let Some(ref rev) = args.rev {
@@ -143,6 +210,14 @@ pub fn run(args: &BlameArgs, cli: &Cli) -> Result<i32> {
                     ("", &hex[..8.min(hex.len())])
                 };
 
+                // Colorize the hash portion in yellow
+                let hash_str = format!("{}{}", prefix, short_display);
+                let hash_display = if color_on {
+                    format!("\x1b[33m{}\x1b[m", hash_str)
+                } else {
+                    hash_str
+                };
+
                 if let Some(commit) = commit_cache.get(&entry.commit) {
                     let author = if args.show_email {
                         format!("<{}>", String::from_utf8_lossy(&commit.author.email))
@@ -155,9 +230,8 @@ pub fn run(args: &BlameArgs, cli: &Cli) -> Result<i32> {
 
                     write!(
                         out,
-                        "{}{} ({:>width$} {} {:>lw$}) ",
-                        prefix,
-                        short_display,
+                        "{} ({:>width$} {} {:>lw$}) ",
+                        hash_display,
                         author,
                         date_display,
                         line_num,
@@ -167,9 +241,8 @@ pub fn run(args: &BlameArgs, cli: &Cli) -> Result<i32> {
                 } else {
                     write!(
                         out,
-                        "{}{} ({:>lw$}) ",
-                        prefix,
-                        short_display,
+                        "{} ({:>lw$}) ",
+                        hash_display,
                         line_num,
                         lw = line_width,
                     )?;
@@ -474,6 +547,12 @@ fn resolve_path_in_tree(
     }
 
     Ok(current)
+}
+
+/// Load color configuration from the repository config (best-effort).
+fn load_color_config(repo: &git_repository::Repository) -> ColorConfig {
+    let config = repo.config();
+    ColorConfig::from_config(|key| config.get_string(key).ok().flatten())
 }
 
 fn parse_line_range(range: &str, total: usize) -> Result<(usize, usize)> {

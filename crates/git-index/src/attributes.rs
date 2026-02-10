@@ -41,6 +41,15 @@ pub struct AttributeStack {
     rules: Vec<AttributeRule>,
 }
 
+/// End-of-line conversion mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Eol {
+    /// LF line endings.
+    Lf,
+    /// CRLF line endings.
+    CrLf,
+}
+
 impl AttributeStack {
     /// Create an empty attribute stack.
     pub fn new() -> Self {
@@ -140,6 +149,93 @@ impl AttributeStack {
                 });
             }
         }
+    }
+
+    /// Check if a path is marked as binary.
+    pub fn is_binary(&self, path: &BStr) -> bool {
+        // binary attribute or -diff -merge -text
+        let binary = self.get(path, BStr::new(b"binary"));
+        if binary == AttributeValue::Set {
+            return true;
+        }
+        let diff = self.get(path, BStr::new(b"diff"));
+        let merge_attr = self.get(path, BStr::new(b"merge"));
+        let text = self.get(path, BStr::new(b"text"));
+        diff == AttributeValue::Unset
+            && merge_attr == AttributeValue::Unset
+            && text == AttributeValue::Unset
+    }
+
+    /// Get the EOL setting for a path.
+    pub fn eol_for(&self, path: &BStr) -> Option<Eol> {
+        let eol = self.get(path, BStr::new(b"eol"));
+        match eol {
+            AttributeValue::Value(ref val) => match val.as_bytes() {
+                b"crlf" => Some(Eol::CrLf),
+                b"lf" => Some(Eol::Lf),
+                _ => None,
+            },
+            _ => {
+                let text = self.get(path, BStr::new(b"text"));
+                match text {
+                    AttributeValue::Set | AttributeValue::Value(_) => Some(Eol::Lf),
+                    _ => None,
+                }
+            }
+        }
+    }
+
+    /// Get the diff driver name for a path.
+    pub fn diff_driver(&self, path: &BStr) -> Option<BString> {
+        match self.get(path, BStr::new(b"diff")) {
+            AttributeValue::Value(val) => Some(val),
+            _ => None,
+        }
+    }
+
+    /// Get the merge driver name for a path.
+    pub fn merge_driver(&self, path: &BStr) -> Option<BString> {
+        match self.get(path, BStr::new(b"merge")) {
+            AttributeValue::Value(val) => Some(val),
+            _ => None,
+        }
+    }
+
+    /// Get the clean/smudge filter name for a path.
+    pub fn filter_for(&self, path: &BStr) -> Option<BString> {
+        match self.get(path, BStr::new(b"filter")) {
+            AttributeValue::Value(val) => Some(val),
+            _ => None,
+        }
+    }
+
+    /// Load attributes from core.attributesFile config and $GIT_DIR/info/attributes.
+    pub fn load_global(&mut self, git_dir: &Path, config: &git_config::ConfigSet) -> Result<(), IndexError> {
+        // Load $GIT_DIR/info/attributes
+        let info_attrs = git_dir.join("info").join("attributes");
+        self.add_file(&info_attrs)?;
+
+        // Load core.attributesFile
+        if let Ok(Some(path_str)) = config.get_string("core.attributesFile") {
+            let path = if let Some(stripped) = path_str.strip_prefix("~/") {
+                if let Some(home) = std::env::var_os("HOME") {
+                    PathBuf::from(home).join(stripped)
+                } else {
+                    PathBuf::from(&path_str)
+                }
+            } else {
+                PathBuf::from(&path_str)
+            };
+            self.add_file(&path)?;
+        } else {
+            // Default: ~/.config/git/attributes
+            if let Some(home) = std::env::var_os("HOME") {
+                let default_path = PathBuf::from(home).join(".config/git/attributes");
+                self.add_file(&default_path)?;
+            }
+        }
+
+        Ok(())
     }
 }
 
