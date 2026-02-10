@@ -35,6 +35,8 @@ crc32fast = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 criterion = { workspace = true }
+paste = "1"
+regex = { workspace = true }
 
 [[bench]]
 name = "perf_compare"

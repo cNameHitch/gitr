@@ -210,6 +210,115 @@ pub fn next_date(counter: &mut u64) -> String {
 
 // ──────────────────────────── Assertion Helpers ────────────────────────────
 
+/// Assert full parity: exit code, stdout, AND stderr all match.
+pub fn assert_full_parity(git_result: &CommandResult, gitr_result: &CommandResult) {
+    assert_exit_code_eq(git_result, gitr_result);
+    if git_result.stdout != gitr_result.stdout {
+        panic!(
+            "Stdout mismatch (exit codes both {}):\n--- git ---\n{}\n--- gitr ---\n{}\n--- end ---",
+            git_result.exit_code, git_result.stdout, gitr_result.stdout,
+        );
+    }
+    if git_result.stderr != gitr_result.stderr {
+        panic!(
+            "Stderr mismatch (exit codes both {}):\n--- git ---\n{}\n--- gitr ---\n{}\n--- end ---",
+            git_result.exit_code, git_result.stderr, gitr_result.stderr,
+        );
+    }
+}
+
+/// Assert that stderr output matches between git and gitr results.
+pub fn assert_stderr_eq(git_result: &CommandResult, gitr_result: &CommandResult) {
+    if git_result.stderr != gitr_result.stderr {
+        panic!(
+            "Stderr mismatch:\n--- git (exit {}) ---\n{}\n--- gitr (exit {}) ---\n{}\n--- end ---",
+            git_result.exit_code, git_result.stderr,
+            gitr_result.exit_code, gitr_result.stderr,
+        );
+    }
+}
+
+/// Assert that `git ls-files -s` output matches between two repo directories.
+pub fn assert_index_eq(dir_git: &Path, dir_gitr: &Path) {
+    let g = git(dir_git, &["ls-files", "-s"]);
+    let m = git(dir_gitr, &["ls-files", "-s"]);
+    if g.stdout != m.stdout {
+        panic!(
+            "Index mismatch (git ls-files -s):\n--- git repo ---\n{}\n--- gitr repo ---\n{}\n--- end ---",
+            g.stdout, m.stdout,
+        );
+    }
+}
+
+/// Assert that `git status --porcelain` output matches between two repo directories.
+pub fn assert_worktree_eq(dir_git: &Path, dir_gitr: &Path) {
+    let g = git(dir_git, &["status", "--porcelain"]);
+    let m = git(dir_gitr, &["status", "--porcelain"]);
+    if g.stdout != m.stdout {
+        panic!(
+            "Worktree mismatch (git status --porcelain):\n--- git repo ---\n{}\n--- gitr repo ---\n{}\n--- end ---",
+            g.stdout, m.stdout,
+        );
+    }
+}
+
+/// Assert that `git reflog show <ref>` output matches between two repo directories.
+pub fn assert_reflog_eq(dir_git: &Path, dir_gitr: &Path, refname: &str) {
+    let g = git(dir_git, &["reflog", "show", refname]);
+    let m = git(dir_gitr, &["reflog", "show", refname]);
+    if g.stdout != m.stdout {
+        panic!(
+            "Reflog mismatch for '{}':\n--- git repo ---\n{}\n--- gitr repo ---\n{}\n--- end ---",
+            refname, g.stdout, m.stdout,
+        );
+    }
+}
+
+/// Assert that `git rev-parse HEAD` output matches between two repo directories.
+pub fn assert_head_eq(dir_git: &Path, dir_gitr: &Path) {
+    let g = git(dir_git, &["rev-parse", "HEAD"]);
+    let m = git(dir_gitr, &["rev-parse", "HEAD"]);
+    if g.stdout != m.stdout {
+        panic!(
+            "HEAD mismatch:\n--- git repo ---\n{}\n--- gitr repo ---\n{}\n--- end ---",
+            g.stdout.trim(), m.stdout.trim(),
+        );
+    }
+}
+
+/// Assert that stderr matches after normalizing paths and whitespace.
+/// Strips absolute paths (replacing with `<PATH>`), normalizes consecutive
+/// whitespace, and trims each line before comparing.
+pub fn assert_stderr_matches(git_result: &CommandResult, gitr_result: &CommandResult) {
+    let normalize = |s: &str| -> String {
+        s.lines()
+            .map(|line| {
+                // Replace absolute paths like /tmp/xxx/... or /var/xxx/...
+                let re = regex::Regex::new(r"(/[^\s:]+)").unwrap();
+                let line = re.replace_all(line, "<PATH>");
+                line.trim().to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let g = normalize(&git_result.stderr);
+    let m = normalize(&gitr_result.stderr);
+    if g != m {
+        panic!(
+            "Stderr mismatch (after normalization):\n--- git ---\n{}\n--- gitr ---\n{}\n--- end ---",
+            g, m,
+        );
+    }
+}
+
+/// Run a command expected to fail, verify both git and gitr fail with same exit code.
+pub fn assert_both_fail(dir_git: &Path, dir_gitr: &Path, args: &[&str]) {
+    let g = git(dir_git, args);
+    let m = gitr(dir_gitr, args);
+    assert_ne!(g.exit_code, 0, "Expected git to fail for args {:?}, but it succeeded", args);
+    assert_exit_code_eq(&g, &m);
+}
+
 /// Assert that stdout and exit_code are identical between git and gitr results.
 pub fn assert_output_eq(git_result: &CommandResult, gitr_result: &CommandResult) {
     if git_result.exit_code != gitr_result.exit_code {
@@ -561,6 +670,194 @@ pub fn setup_submodule_repo(dir: &Path, sub_dir: &Path) {
     git(dir, &["commit", "-m", "add submodule"]);
 }
 
+/// Create a repo with renamed files for testing `--follow`, `--find-renames`, etc.
+///
+/// Creates file `original.txt`, commits, then renames to `renamed.txt` and commits again.
+pub fn setup_renamed_files(dir: &Path) {
+    setup_empty_repo(dir);
+    let mut counter = 0u64;
+
+    std::fs::write(dir.join("original.txt"), "content that will be renamed\n").unwrap();
+    let date = next_date(&mut counter);
+    git_with_date(dir, &["add", "original.txt"], &date);
+    git_with_date(dir, &["commit", "-m", "add original"], &date);
+
+    git(dir, &["mv", "original.txt", "renamed.txt"]);
+    let date = next_date(&mut counter);
+    git_with_date(dir, &["add", "-A"], &date);
+    git_with_date(dir, &["commit", "-m", "rename file"], &date);
+}
+
+/// Create a repo with multiple merge scenario branches ready to merge into main.
+///
+/// - `main`: 3 commits
+/// - `ff-branch`: fast-forward mergeable (extends main)
+/// - `merge-branch`: 3-way merge (diverged, no conflict)
+/// - `conflict-branch`: conflicting changes to `shared.txt`
+/// - `octopus-a`, `octopus-b`: two branches for octopus merge
+pub fn setup_merge_scenarios(dir: &Path) {
+    setup_empty_repo(dir);
+    let mut counter = 0u64;
+
+    // Initial shared file
+    std::fs::write(dir.join("shared.txt"), "line 1\nline 2\nline 3\n").unwrap();
+    let date = next_date(&mut counter);
+    git_with_date(dir, &["add", "shared.txt"], &date);
+    git_with_date(dir, &["commit", "-m", "initial"], &date);
+
+    // 2 more commits on main
+    for i in 0..2 {
+        let f = format!("main_{}.txt", i);
+        std::fs::write(dir.join(&f), format!("main content {}\n", i)).unwrap();
+        let date = next_date(&mut counter);
+        git_with_date(dir, &["add", &f], &date);
+        git_with_date(dir, &["commit", "-m", &format!("main commit {}", i)], &date);
+    }
+
+    // ff-branch: extends tip of main
+    git(dir, &["branch", "ff-branch"]);
+    git(dir, &["checkout", "ff-branch"]);
+    std::fs::write(dir.join("ff_file.txt"), "ff content\n").unwrap();
+    let date = next_date(&mut counter);
+    git_with_date(dir, &["add", "ff_file.txt"], &date);
+    git_with_date(dir, &["commit", "-m", "ff commit"], &date);
+    git(dir, &["checkout", "main"]);
+
+    // merge-branch: diverges from HEAD~1, no conflict
+    git(dir, &["checkout", "-b", "merge-branch", "HEAD~1"]);
+    std::fs::write(dir.join("merge_file.txt"), "merge content\n").unwrap();
+    let date = next_date(&mut counter);
+    git_with_date(dir, &["add", "merge_file.txt"], &date);
+    git_with_date(dir, &["commit", "-m", "merge branch commit"], &date);
+    git(dir, &["checkout", "main"]);
+
+    // conflict-branch: modifies shared.txt line 2
+    git(dir, &["checkout", "-b", "conflict-branch", "HEAD~2"]);
+    std::fs::write(dir.join("shared.txt"), "line 1\nconflict change\nline 3\n").unwrap();
+    let date = next_date(&mut counter);
+    git_with_date(dir, &["add", "shared.txt"], &date);
+    git_with_date(dir, &["commit", "-m", "conflict commit"], &date);
+    git(dir, &["checkout", "main"]);
+
+    // octopus branches
+    git(dir, &["checkout", "-b", "octopus-a", "main"]);
+    std::fs::write(dir.join("oct_a.txt"), "octopus a\n").unwrap();
+    let date = next_date(&mut counter);
+    git_with_date(dir, &["add", "oct_a.txt"], &date);
+    git_with_date(dir, &["commit", "-m", "octopus a commit"], &date);
+
+    git(dir, &["checkout", "-b", "octopus-b", "main"]);
+    std::fs::write(dir.join("oct_b.txt"), "octopus b\n").unwrap();
+    let date = next_date(&mut counter);
+    git_with_date(dir, &["add", "oct_b.txt"], &date);
+    git_with_date(dir, &["commit", "-m", "octopus b commit"], &date);
+
+    git(dir, &["checkout", "main"]);
+}
+
+/// Create a repo with stash-worthy changes: tracked modifications, staged changes, untracked files.
+pub fn setup_stash_scenarios(dir: &Path) {
+    setup_empty_repo(dir);
+    let mut counter = 0u64;
+
+    std::fs::write(dir.join("tracked.txt"), "original tracked\n").unwrap();
+    std::fs::write(dir.join("staged.txt"), "original staged\n").unwrap();
+    let date = next_date(&mut counter);
+    git_with_date(dir, &["add", "."], &date);
+    git_with_date(dir, &["commit", "-m", "initial"], &date);
+
+    // Modify tracked file (unstaged)
+    std::fs::write(dir.join("tracked.txt"), "modified tracked\n").unwrap();
+    // Stage a change
+    std::fs::write(dir.join("staged.txt"), "staged change\n").unwrap();
+    git(dir, &["add", "staged.txt"]);
+    // Untracked file
+    std::fs::write(dir.join("untracked.txt"), "untracked content\n").unwrap();
+}
+
+/// Create a repo with both lightweight and annotated tags.
+pub fn setup_tag_scenarios(dir: &Path) {
+    setup_empty_repo(dir);
+    let mut counter = 0u64;
+
+    for i in 0..3 {
+        let f = format!("file_{}.txt", i);
+        std::fs::write(dir.join(&f), format!("content {}\n", i)).unwrap();
+        let date = next_date(&mut counter);
+        git_with_date(dir, &["add", &f], &date);
+        git_with_date(dir, &["commit", "-m", &format!("commit {}", i)], &date);
+    }
+
+    // Lightweight tag on first commit
+    git(dir, &["tag", "v0.1", "HEAD~2"]);
+    // Annotated tag on second commit
+    git(dir, &["tag", "-a", "v0.2", "-m", "release 0.2", "HEAD~1"]);
+    // Annotated tag on HEAD
+    git(dir, &["tag", "-a", "v1.0", "-m", "release 1.0"]);
+    // Lightweight on HEAD
+    git(dir, &["tag", "latest"]);
+}
+
+/// Create a repo ready for rebase tests: main (3 commits), feature (2 commits diverged).
+pub fn setup_rebase_scenarios(dir: &Path) {
+    setup_empty_repo(dir);
+    let mut counter = 0u64;
+
+    // 3 commits on main
+    for i in 0..3 {
+        let f = format!("main_{}.txt", i);
+        std::fs::write(dir.join(&f), format!("main {}\n", i)).unwrap();
+        let date = next_date(&mut counter);
+        git_with_date(dir, &["add", &f], &date);
+        git_with_date(dir, &["commit", "-m", &format!("main {}", i)], &date);
+    }
+
+    // Feature branch from commit 1
+    git(dir, &["checkout", "-b", "feature", "HEAD~2"]);
+    for i in 0..2 {
+        let f = format!("feat_{}.txt", i);
+        std::fs::write(dir.join(&f), format!("feat {}\n", i)).unwrap();
+        let date = next_date(&mut counter);
+        git_with_date(dir, &["add", &f], &date);
+        git_with_date(dir, &["commit", "-m", &format!("feat {}", i)], &date);
+    }
+    // Stay on feature for rebase tests
+}
+
+/// Create a repo with local git config set for config-reading tests.
+pub fn setup_config_hierarchy(dir: &Path) {
+    setup_empty_repo(dir);
+    // Local config
+    git(dir, &["config", "user.name", "Local Author"]);
+    git(dir, &["config", "user.email", "local@example.com"]);
+    git(dir, &["config", "core.autocrlf", "false"]);
+    git(dir, &["config", "merge.ff", "only"]);
+    git(dir, &["config", "color.ui", "auto"]);
+    git(dir, &["config", "alias.st", "status"]);
+    git(dir, &["config", "custom.section.key", "value"]);
+}
+
+/// Create a repo with files that have special permissions (executable bit).
+pub fn setup_permission_files(dir: &Path) {
+    setup_empty_repo(dir);
+    let mut counter = 0u64;
+
+    std::fs::write(dir.join("normal.txt"), "normal file\n").unwrap();
+    std::fs::write(dir.join("script.sh"), "#!/bin/sh\necho hello\n").unwrap();
+
+    // Make script executable
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o755);
+        std::fs::set_permissions(dir.join("script.sh"), perms).unwrap();
+    }
+
+    let date = next_date(&mut counter);
+    git_with_date(dir, &["add", "."], &date);
+    git_with_date(dir, &["commit", "-m", "add files with permissions"], &date);
+}
+
 /// Create a repo with the specified number of sequential commits, branches, and files.
 ///
 /// - `commits`: number of sequential commits on main (each adds/modifies a unique file)
@@ -602,4 +899,67 @@ pub fn setup_large_repo(dir: &Path, commits: usize, branches: usize, files: usiz
             git(dir, &["branch", &format!("branch-{}", b), &rev]);
         }
     }
+}
+
+// ──────────────────────────── Macros ────────────────────────────
+
+/// Generate a parity test that sets up identical repos, runs the same command on
+/// both C git and gitr, and asserts full parity (exit code + stdout + stderr).
+///
+/// Use `verify_state` variant for mutating commands to also compare index + worktree.
+#[macro_export]
+macro_rules! parity_test {
+    ($name:ident, setup = $setup:expr, args = $args:expr) => {
+        #[test]
+        fn $name() {
+            let dir_git = tempfile::tempdir().unwrap();
+            let dir_gitr = tempfile::tempdir().unwrap();
+            $setup(dir_git.path());
+            $setup(dir_gitr.path());
+            let g = common::git(dir_git.path(), $args);
+            let m = common::gitr(dir_gitr.path(), $args);
+            common::assert_output_eq(&g, &m);
+        }
+    };
+    ($name:ident, setup = $setup:expr, args = $args:expr, verify_state) => {
+        #[test]
+        fn $name() {
+            let dir_git = tempfile::tempdir().unwrap();
+            let dir_gitr = tempfile::tempdir().unwrap();
+            $setup(dir_git.path());
+            $setup(dir_gitr.path());
+            let g = common::git(dir_git.path(), $args);
+            let m = common::gitr(dir_gitr.path(), $args);
+            common::assert_output_eq(&g, &m);
+            common::assert_index_eq(dir_git.path(), dir_gitr.path());
+            common::assert_worktree_eq(dir_git.path(), dir_gitr.path());
+        }
+    };
+}
+
+/// Generate one parity test per flag for a given command.
+///
+/// Each test runs `<cmd> <flag>` on both git and gitr and asserts output equality.
+///
+/// ```ignore
+/// flag_matrix!("log", setup = setup_linear_history_5, flags = ["--oneline", "--graph", "--stat"]);
+/// ```
+#[macro_export]
+macro_rules! flag_matrix {
+    ($cmd:expr, setup = $setup:expr, flags = [$($flag:expr),+ $(,)?]) => {
+        paste::paste! {
+            $(
+                #[test]
+                fn [< test_ $cmd _ $flag:snake >]() {
+                    let dir_git = tempfile::tempdir().unwrap();
+                    let dir_gitr = tempfile::tempdir().unwrap();
+                    $setup(dir_git.path());
+                    $setup(dir_gitr.path());
+                    let g = common::git(dir_git.path(), &[$cmd, $flag]);
+                    let m = common::gitr(dir_gitr.path(), &[$cmd, $flag]);
+                    common::assert_output_eq(&g, &m);
+                }
+            )+
+        }
+    };
 }
