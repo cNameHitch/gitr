@@ -17,7 +17,7 @@ fn raw_format_roundtrip() {
 
     for input in inputs {
         let date = GitDate::parse_raw(input).unwrap();
-        let formatted = date.format(DateFormat::Raw);
+        let formatted = date.format(&DateFormat::Raw);
         let reparsed = GitDate::parse_raw(&formatted).unwrap();
 
         assert_eq!(
@@ -66,7 +66,7 @@ fn signature_roundtrip() {
 #[test]
 fn iso_format_structure() {
     let date = GitDate::parse_raw("1234567890 +0000").unwrap();
-    let formatted = date.format(DateFormat::Iso);
+    let formatted = date.format(&DateFormat::Iso);
 
     // ISO format should be: YYYY-MM-DD HH:MM:SS +ZZZZ
     assert!(
@@ -85,7 +85,7 @@ fn iso_format_structure() {
 #[test]
 fn iso_strict_format_structure() {
     let date = GitDate::parse_raw("1234567890 +0000").unwrap();
-    let formatted = date.format(DateFormat::IsoStrict);
+    let formatted = date.format(&DateFormat::IsoStrict);
 
     // Should contain a T separator
     assert!(
@@ -99,7 +99,7 @@ fn iso_strict_format_structure() {
 #[test]
 fn short_format_structure() {
     let date = GitDate::parse_raw("1234567890 +0000").unwrap();
-    let formatted = date.format(DateFormat::Short);
+    let formatted = date.format(&DateFormat::Short);
 
     assert_eq!(formatted.len(), 10, "Short format should be 10 chars: {}", formatted);
     assert_eq!(&formatted[4..5], "-");
@@ -110,7 +110,7 @@ fn short_format_structure() {
 #[test]
 fn unix_format_is_timestamp() {
     let date = GitDate::parse_raw("1234567890 +0000").unwrap();
-    let formatted = date.format(DateFormat::Unix);
+    let formatted = date.format(&DateFormat::Unix);
     assert_eq!(formatted, "1234567890");
 }
 
@@ -161,7 +161,7 @@ fn edge_timestamps() {
 #[test]
 fn rfc2822_format() {
     let date = GitDate::parse_raw("1234567890 +0000").unwrap();
-    let formatted = date.format(DateFormat::Rfc2822);
+    let formatted = date.format(&DateFormat::Rfc2822);
 
     // RFC2822 should contain day-of-week abbreviation and month abbreviation
     let weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];

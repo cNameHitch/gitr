@@ -9,6 +9,8 @@ Auto-generated from all feature plans. Last updated: 2026-02-07
 - Git on-disk format (loose objects, packfiles v2, refs, index, config) — all file-based (020-git-parity)
 - Rust 1.75+ (Cargo workspace, 19 crates) + `tempfile` 3 (test isolation), `std::process::Command` (subprocess execution) (021-e2e-interop-coverage)
 - N/A (test-only feature) (021-e2e-interop-coverage)
+- Rust 1.75+ (Cargo workspace, 16 crates) + clap 4 (CLI), bstr 1 (byte strings), chrono (date formatting via git-utils), thiserror 2 / anyhow 1 (errors), git-diff (diffstat), git-revwalk (format/graph), git-ref (reflog) (025-git-parity-phase2)
+- Git on-disk format (loose objects, packfiles, refs, index, config, reflog) — all file-based (025-git-parity-phase2)
 
 - Rust 1.75+ + `tempfile` (test isolation), `std::process::Command` (subprocess execution) (019-e2e-interop-tests)
 
@@ -28,9 +30,9 @@ cargo test [ONLY COMMANDS FOR ACTIVE TECHNOLOGIES][ONLY COMMANDS FOR ACTIVE TECH
 Rust 1.75+: Follow standard conventions
 
 ## Recent Changes
+- 025-git-parity-phase2: Added Rust 1.75+ (Cargo workspace, 16 crates) + clap 4 (CLI), bstr 1 (byte strings), chrono (date formatting via git-utils), thiserror 2 / anyhow 1 (errors), git-diff (diffstat), git-revwalk (format/graph), git-ref (reflog)
 - 024-git-parity-polish: 42 behavioral parity fixes across `git-cli`, `git-revwalk`, `git-utils`, `git-config`, `git-repository` — pathspec disambiguation, format string completeness, exit code mapping, date padding, system config cascade, macOS init defaults
 - 022-perf-optimization: Added `rayon` 1 (parallel stat), `lru` 0.12 (object cache), commit-graph v1 read/write support, generation-number pruning in git-revwalk
-- 021-e2e-interop-coverage: Added Rust 1.75+ (Cargo workspace, 19 crates) + `tempfile` 3 (test isolation), `std::process::Command` (subprocess execution)
 
 
 <!-- MANUAL ADDITIONS START -->

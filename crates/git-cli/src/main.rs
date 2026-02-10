@@ -9,7 +9,7 @@ use clap::{error::ErrorKind, Parser};
 use commands::Commands;
 
 #[derive(Parser)]
-#[command(name = "gitr", about = "A Git implementation in Rust")]
+#[command(name = "gitr", about = "A Git implementation in Rust", version = env!("CARGO_PKG_VERSION"))]
 pub struct Cli {
     #[command(subcommand)]
     command: Commands,

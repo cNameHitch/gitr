@@ -31,7 +31,7 @@ pub struct ShowArgs {
     name_status: bool,
 
     /// Don't show diff
-    #[arg(long)]
+    #[arg(short = 's', long)]
     no_patch: bool,
 
     /// Object to show (defaults to HEAD)
@@ -192,12 +192,12 @@ fn show_tag(
         writeln!(
             out,
             "Date:   {}",
-            tagger.date.format(git_utils::date::DateFormat::Default)
+            tagger.date.format(&git_utils::date::DateFormat::Default)
         )?;
     }
     writeln!(out)?;
     for line in tag.message.lines() {
-        writeln!(out, "    {}", String::from_utf8_lossy(line))?;
+        writeln!(out, "{}", String::from_utf8_lossy(line))?;
     }
     writeln!(out)?;
 

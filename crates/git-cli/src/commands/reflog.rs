@@ -75,7 +75,7 @@ fn reflog_show_ref(
     for (i, entry) in entries.iter().enumerate() {
         let hex = entry.new_oid.to_hex();
         let short = &hex[..7.min(hex.len())];
-        let _date = entry.identity.date.format(DateFormat::Relative);
+        let _date = entry.identity.date.format(&DateFormat::Relative);
         let message = String::from_utf8_lossy(&entry.message);
 
         writeln!(

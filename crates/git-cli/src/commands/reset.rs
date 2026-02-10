@@ -1,3 +1,4 @@
+use std::io::{self, Write};
 use std::path::Path;
 
 use anyhow::{bail, Result};
@@ -7,6 +8,7 @@ use git_hash::ObjectId;
 use git_index::{Index, IndexEntry, Stage, StatData, EntryFlags};
 use git_object::{FileMode, Object};
 use git_ref::{RefName, RefStore};
+use git_ref::reflog::{ReflogEntry, append_reflog_entry};
 
 use crate::Cli;
 use super::open_repo;
@@ -77,14 +79,54 @@ pub fn run(args: &ResetArgs, cli: &Cli) -> Result<i32> {
         }
     }
 
+    // Capture old HEAD before reset
+    let old_head = repo.head_oid()?.unwrap_or(ObjectId::NULL_SHA1);
+
     // Move HEAD
     update_head(&repo, &target_oid)?;
+
+    // Write reflog entry for HEAD
+    {
+        let sig = super::commit::get_signature("GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_COMMITTER_DATE", &repo)?;
+        let entry = ReflogEntry {
+            old_oid: old_head,
+            new_oid: target_oid,
+            identity: sig,
+            message: BString::from(format!("reset: moving to {}", commit)),
+        };
+        let head_ref = RefName::new(BString::from("HEAD"))?;
+        append_reflog_entry(repo.git_dir(), &head_ref, &entry)?;
+    }
 
     // Clean up merge state files
     let git_dir = repo.git_dir();
     let _ = std::fs::remove_file(git_dir.join("MERGE_HEAD"));
     let _ = std::fs::remove_file(git_dir.join("MERGE_MSG"));
     let _ = std::fs::remove_file(git_dir.join("MERGE_MODE"));
+
+    let stderr = io::stderr();
+    let mut err = stderr.lock();
+
+    if is_hard {
+        // Show "HEAD is now at <short-hash> <subject>"
+        let obj = repo.odb().read(&target_oid)?;
+        if let Some(Object::Commit(c)) = obj {
+            let hex = target_oid.to_hex();
+            let short = &hex[..7.min(hex.len())];
+            let summary = String::from_utf8_lossy(c.summary());
+            writeln!(err, "HEAD is now at {} {}", short, summary)?;
+        }
+    } else if !is_soft {
+        // Mixed reset: show unstaged changes
+        let unstaged = git_diff::worktree::diff_index_to_worktree(&mut repo, &git_diff::DiffOptions::default())?;
+        if !unstaged.files.is_empty() {
+            writeln!(err, "Unstaged changes after reset:")?;
+            for file in &unstaged.files {
+                let code = file.status.as_char();
+                writeln!(err, "{}\t{}", code, file.path().to_str_lossy())?;
+            }
+        }
+    }
 
     Ok(0)
 }

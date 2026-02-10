@@ -23,6 +23,10 @@ pub struct RevertArgs {
     #[arg(short = 'e', long)]
     edit: bool,
 
+    /// Use the auto-generated message without launching an editor
+    #[arg(long)]
+    no_edit: bool,
+
     /// Abort the current revert
     #[arg(long)]
     abort: bool,

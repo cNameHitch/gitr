@@ -61,19 +61,23 @@ impl GraphDrawer {
                     self.columns[col] = Some(parents[0]);
                 }
 
-                // Draw continuation line.
-                let mut cont_line = String::new();
-                for (i, slot) in self.columns.iter().enumerate() {
-                    if slot.is_some() {
-                        cont_line.push('|');
-                    } else {
-                        cont_line.push(' ');
+                // Only draw continuation line if there are multiple active columns
+                // (on linear history, no extra | lines between commits)
+                let active_count = self.columns.iter().filter(|s| s.is_some()).count();
+                if active_count > 1 {
+                    let mut cont_line = String::new();
+                    for (i, slot) in self.columns.iter().enumerate() {
+                        if slot.is_some() {
+                            cont_line.push('|');
+                        } else {
+                            cont_line.push(' ');
+                        }
+                        if i + 1 < self.columns.len() {
+                            cont_line.push(' ');
+                        }
                     }
-                    if i + 1 < self.columns.len() {
-                        cont_line.push(' ');
-                    }
+                    lines.push(cont_line);
                 }
-                lines.push(cont_line);
             }
             _ => {
                 // Merge commit: first parent stays in this column,

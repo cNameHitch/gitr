@@ -7,6 +7,7 @@ use clap::Args;
 use git_hash::ObjectId;
 use git_index::{Index, IndexEntry, Stage, StatData, EntryFlags};
 use git_object::{FileMode, Object};
+use git_ref::reflog::{append_reflog_entry, ReflogEntry};
 use git_ref::{RefName, RefStore};
 
 use crate::Cli;
@@ -40,6 +41,13 @@ pub fn run(args: &SwitchArgs, cli: &Cli) -> Result<i32> {
     let stderr = io::stderr();
     let mut err = stderr.lock();
 
+    // Capture current HEAD info for reflog
+    let old_head_oid = repo.head_oid()?.unwrap_or(ObjectId::NULL_SHA1);
+    let old_branch = repo.current_branch()?.unwrap_or_else(|| {
+        let hex = old_head_oid.to_hex();
+        hex[..7.min(hex.len())].to_string()
+    });
+
     // Handle -c (create and switch)
     if let Some(ref new_branch) = args.create {
         let start = args.target.as_deref().unwrap_or("HEAD");
@@ -52,6 +60,7 @@ pub fn run(args: &SwitchArgs, cli: &Cli) -> Result<i32> {
 
         repo.refs().write_ref(&refname, &oid)?;
         switch_to_branch(&mut repo, new_branch, &oid, args.force)?;
+        write_switch_reflog(&repo, old_head_oid, oid, &old_branch, new_branch)?;
         writeln!(err, "Switched to a new branch '{}'", new_branch)?;
         return Ok(0);
     }
@@ -64,6 +73,7 @@ pub fn run(args: &SwitchArgs, cli: &Cli) -> Result<i32> {
         let refname = RefName::new(BString::from(format!("refs/heads/{}", new_branch)))?;
         repo.refs().write_ref(&refname, &oid)?;
         switch_to_branch(&mut repo, new_branch, &oid, args.force)?;
+        write_switch_reflog(&repo, old_head_oid, oid, &old_branch, new_branch)?;
         writeln!(err, "Switched to a new branch '{}'", new_branch)?;
         return Ok(0);
     }
@@ -74,6 +84,7 @@ pub fn run(args: &SwitchArgs, cli: &Cli) -> Result<i32> {
     if args.detach {
         let oid = git_revwalk::resolve_revision(&repo, target)?;
         switch_to_detached(&mut repo, &oid, args.force)?;
+        write_switch_reflog(&repo, old_head_oid, oid, &old_branch, target)?;
         writeln!(err, "HEAD is now at {} {}", &oid.to_hex()[..7], target)?;
         return Ok(0);
     }
@@ -83,11 +94,36 @@ pub fn run(args: &SwitchArgs, cli: &Cli) -> Result<i32> {
     if let Some(reference) = repo.refs().resolve(&refname)? {
         let oid = reference.peel_to_oid(repo.refs())?;
         switch_to_branch(&mut repo, target, &oid, args.force)?;
+        write_switch_reflog(&repo, old_head_oid, oid, &old_branch, target)?;
         writeln!(err, "Switched to branch '{}'", target)?;
         Ok(0)
     } else {
         bail!("fatal: invalid reference: {}", target);
     }
+}
+
+fn write_switch_reflog(
+    repo: &git_repository::Repository,
+    old_oid: ObjectId,
+    new_oid: ObjectId,
+    old_name: &str,
+    new_name: &str,
+) -> Result<()> {
+    let sig = super::commit::get_signature(
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_DATE",
+        repo,
+    )?;
+    let entry = ReflogEntry {
+        old_oid,
+        new_oid,
+        identity: sig,
+        message: BString::from(format!("checkout: moving from {} to {}", old_name, new_name)),
+    };
+    let head_ref = RefName::new(BString::from("HEAD"))?;
+    append_reflog_entry(repo.git_dir(), &head_ref, &entry)?;
+    Ok(())
 }
 
 fn switch_to_branch(

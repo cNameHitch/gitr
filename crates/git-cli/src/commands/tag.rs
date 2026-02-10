@@ -117,18 +117,28 @@ fn list_tags(repo: &git_repository::Repository, show_annotation: Option<usize>, 
         let short = full.strip_prefix("refs/tags/").unwrap_or(full);
 
         if let Some(max_lines) = show_annotation {
-            // Try to read annotation from tag object
+            // Try to read annotation from tag object or commit subject for lightweight tags
             if let Ok(oid) = r.peel_to_oid(repo.refs()) {
-                if let Ok(Some(Object::Tag(tag))) = repo.odb().read(&oid) {
-                    let msg = String::from_utf8_lossy(&tag.message);
-                    let lines: Vec<&str> = msg.lines().collect();
-                    let show_n = max_lines.max(1);
-                    let annotation: String = lines.iter().take(show_n).map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
-                    writeln!(out, "{:<16}{}", short, annotation)?;
-                    continue;
+                if let Ok(Some(obj)) = repo.odb().read(&oid) {
+                    match obj {
+                        Object::Tag(tag) => {
+                            let msg = String::from_utf8_lossy(&tag.message);
+                            let lines: Vec<&str> = msg.lines().collect();
+                            let show_n = max_lines.max(1);
+                            let annotation: String = lines.iter().take(show_n).map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+                            writeln!(out, "{:<16}{}", short, annotation)?;
+                            continue;
+                        }
+                        Object::Commit(commit) => {
+                            let subject = String::from_utf8_lossy(commit.summary().as_ref());
+                            writeln!(out, "{:<16}{}", short, subject)?;
+                            continue;
+                        }
+                        _ => {}
+                    }
                 }
             }
-            // Lightweight tag - no annotation
+            // Fallback: no annotation or subject available
             writeln!(out, "{}", short)?;
         } else {
             writeln!(out, "{}", short)?;

@@ -7,6 +7,7 @@ use clap::Args;
 use git_hash::ObjectId;
 use git_merge::MergeOptions;
 use git_object::Object;
+use git_ref::reflog::{append_reflog_entry, ReflogEntry};
 use git_ref::{RefName, RefStore};
 
 use super::open_repo;
@@ -134,15 +135,39 @@ fn cherry_pick_one(
                 // Update HEAD
                 update_head_to(repo, &commit_oid_new)?;
 
+                // Write reflog entry
+                {
+                    let sig = super::commit::get_signature(
+                        "GIT_COMMITTER_NAME",
+                        "GIT_COMMITTER_EMAIL",
+                        "GIT_COMMITTER_DATE",
+                        repo,
+                    )?;
+                    let summary = String::from_utf8_lossy(commit.summary());
+                    let entry = ReflogEntry {
+                        old_oid: head_oid,
+                        new_oid: commit_oid_new,
+                        identity: sig,
+                        message: BString::from(format!("cherry-pick: {}", summary)),
+                    };
+                    let head_ref = RefName::new(BString::from("HEAD"))?;
+                    append_reflog_entry(repo.git_dir(), &head_ref, &entry)?;
+                }
+
                 // Update worktree to match the new tree
                 if let Some(work_tree) = repo.work_tree().map(|p| p.to_path_buf()) {
                     super::reset::checkout_tree_to_worktree(repo.odb(), &tree_oid, &work_tree)?;
                 }
 
                 let summary = String::from_utf8_lossy(commit.summary());
+                let branch_name = repo.current_branch()?.unwrap_or_else(|| {
+                    let hex = commit_oid_new.to_hex();
+                    format!("(HEAD detached at {})", &hex[..7])
+                });
                 writeln!(
                     out,
-                    "[{}] {}",
+                    "[{} {}] {}",
+                    branch_name,
                     &commit_oid_new.to_hex()[..7],
                     summary
                 )?;

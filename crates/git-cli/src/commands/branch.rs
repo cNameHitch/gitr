@@ -46,6 +46,10 @@ pub struct BranchArgs {
     #[arg(long)]
     format: Option<String>,
 
+    /// Only list branches which contain the specified commit
+    #[arg(long)]
+    contains: Option<String>,
+
     /// Show current branch
     #[arg(long)]
     show_current: bool,
@@ -196,6 +200,13 @@ fn list_branches(
 ) -> Result<i32> {
     let current_branch = repo.current_branch().unwrap_or(None);
 
+    // Resolve --contains commit if provided
+    let contains_oid = if let Some(ref contains_spec) = args.contains {
+        Some(git_revwalk::resolve_revision(repo, contains_spec)?)
+    } else {
+        None
+    };
+
     if !args.remotes || args.all {
         // List local branches - collect first for alignment
         let refs = repo.refs().iter(Some("refs/heads/"))?;
@@ -206,6 +217,18 @@ fn list_branches(
             let full_name = r.name().as_str().to_string();
             let short = full_name.strip_prefix("refs/heads/").unwrap_or(&full_name).to_string();
             let is_current = current_branch.as_deref() == Some(short.as_str());
+
+            // Filter by --contains: skip branches that don't contain the specified commit
+            if let Some(ref target_oid) = contains_oid {
+                if let Ok(branch_oid) = r.peel_to_oid(repo.refs()) {
+                    if !git_revwalk::is_ancestor(repo, target_oid, &branch_oid).unwrap_or(false) {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            }
+
             branches.push((short, is_current));
             ref_map.push(r);
         }

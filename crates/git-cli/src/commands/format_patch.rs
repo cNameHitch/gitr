@@ -76,7 +76,7 @@ pub fn run(args: &FormatPatchArgs, cli: &Cli) -> Result<i32> {
             writeln!(out, "From: {} <{}>",
                 String::from_utf8_lossy(&commit.author.name),
                 String::from_utf8_lossy(&commit.author.email))?;
-            writeln!(out, "Date: {}", commit.author.date.format(DateFormat::Rfc2822))?;
+            writeln!(out, "Date: {}", commit.author.date.format(&DateFormat::Rfc2822))?;
 
             if args.numbered || total > 1 {
                 writeln!(out, "Subject: [{} {}/{}] {}", args.subject_prefix, patch_num, total, subject)?;
@@ -182,7 +182,7 @@ pub fn run(args: &FormatPatchArgs, cli: &Cli) -> Result<i32> {
         writeln!(file, "From: {} <{}>",
             String::from_utf8_lossy(&commit.author.name),
             String::from_utf8_lossy(&commit.author.email))?;
-        writeln!(file, "Date: {}", commit.author.date.format(DateFormat::Rfc2822))?;
+        writeln!(file, "Date: {}", commit.author.date.format(&DateFormat::Rfc2822))?;
 
         // Subject line
         if args.numbered || total > 1 {

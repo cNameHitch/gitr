@@ -412,9 +412,27 @@ impl ConfigSet {
         results
     }
 
+    // --- Scope-specific access ---
+
+    /// Get a config value from a specific scope only.
+    pub fn get_string_from_scope(&self, key: &str, scope: ConfigScope) -> Result<Option<String>, ConfigError> {
+        let config_key = ConfigKey::parse(key)?;
+
+        for file in self.files.iter().rev() {
+            if file.scope() == scope {
+                if let Some(value) = file.get(&config_key) {
+                    return Ok(value.map(|v| v.to_str_lossy().to_string()));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
     // --- Modification ---
 
     /// Set a value in the config file for the given scope.
+    /// For Global scope, creates ~/.gitconfig if no global config file is loaded.
     pub fn set(&mut self, key: &str, value: &str, scope: ConfigScope) -> Result<(), ConfigError> {
         let config_key = ConfigKey::parse(key)?;
         let value_bstr = BStr::new(value.as_bytes());
@@ -432,13 +450,26 @@ impl ConfigSet {
             }
         }
 
+        // If no file exists for this scope, create one for Global scope
+        if scope == ConfigScope::Global {
+            if let Some(home) = std::env::var_os("HOME") {
+                let path = PathBuf::from(home).join(".gitconfig");
+                let mut file = ConfigFile::parse(b"", Some(&path), ConfigScope::Global)?;
+                file.set(&config_key, value_bstr);
+                file.write_to(&path)?;
+                self.files.push(file);
+                return Ok(());
+            }
+        }
+
         Err(ConfigError::Io(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!("no config file loaded for scope {:?}", scope),
         )))
     }
 
-    /// Remove a key from the given scope.
+    /// Remove a key from the given scope (unset).
+    /// Returns Ok(true) if key was found and removed, Ok(false) if key didn't exist.
     pub fn remove(&mut self, key: &str, scope: ConfigScope) -> Result<bool, ConfigError> {
         let config_key = ConfigKey::parse(key)?;
 
@@ -456,6 +487,13 @@ impl ConfigSet {
         }
 
         Ok(false)
+    }
+
+    /// Unset (remove) a key from the given scope.
+    /// Returns Ok(()) always - if key doesn't exist, that's fine.
+    pub fn unset(&mut self, key: &str, scope: ConfigScope) -> Result<(), ConfigError> {
+        self.remove(key, scope)?;
+        Ok(())
     }
 
     /// Load push configuration from the config set.

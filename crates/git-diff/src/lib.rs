@@ -90,6 +90,8 @@ pub enum DiffOutputFormat {
     NameStatus,
     /// Summary of changes (new file, deleted file, rename).
     Summary,
+    /// Word-level diff using `[-removed-]{+added+}` markers.
+    WordDiff,
 }
 
 /// Result of diffing two trees or a working tree.
