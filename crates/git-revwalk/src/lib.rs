@@ -17,7 +17,7 @@ mod objects;
 mod filter;
 pub mod cherry;
 
-pub use walk::{RevWalk, SortOrder, WalkOptions};
+pub use walk::{RevWalk, SortOrder, WalkOptions, DiffSide, SymmetricDiffCommit};
 pub use range::{RevisionRange, resolve_revision};
 pub use merge_base::{merge_base, merge_base_one, merge_base_octopus, fork_point, is_ancestor};
 pub use commit_graph::{CommitGraph, CommitGraphEntry};
@@ -26,7 +26,7 @@ pub use pretty::{format_commit, format_commit_with_decorations, format_builtin, 
 pub use graph_draw::GraphDrawer;
 pub use objects::list_objects;
 pub use filter::ObjectFilter;
-pub use cherry::{cherry, CherryEntry};
+pub use cherry::{cherry, symmetric_diff_with_cherry, compute_patch_id_for, CherryEntry};
 
 use git_hash::ObjectId;
 

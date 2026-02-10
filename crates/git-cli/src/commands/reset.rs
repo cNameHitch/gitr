@@ -11,6 +11,7 @@ use git_ref::{RefName, RefStore};
 use git_ref::reflog::{ReflogEntry, append_reflog_entry};
 
 use crate::Cli;
+use crate::interactive::{InteractiveHunkSelector, reverse_apply_hunks_to_content};
 use super::open_repo;
 
 #[derive(Args)]
@@ -54,6 +55,48 @@ pub struct ResetArgs {
 
 pub fn run(args: &ResetArgs, cli: &Cli) -> Result<i32> {
     let mut repo = open_repo(cli)?;
+
+    if args.patch {
+        let diff_result = git_diff::worktree::diff_head_to_index(&mut repo, &git_diff::DiffOptions::default())?;
+        if diff_result.files.is_empty() {
+            eprintln!("No staged changes.");
+            return Ok(0);
+        }
+        let mut selector = InteractiveHunkSelector::new()?;
+        let selected = selector.select_hunks(&diff_result)?;
+        for file_diff in &selected.files {
+            let path = file_diff.path();
+            // Read current index content (the "new" side of head-to-index diff)
+            let index_oid = {
+                let index = repo.index()?;
+                index.get(path.as_ref(), Stage::Normal).map(|e| e.oid)
+            };
+            let index_content = if let Some(oid) = index_oid {
+                match repo.odb().read(&oid)? {
+                    Some(Object::Blob(b)) => b.data.to_vec(),
+                    _ => Vec::new(),
+                }
+            } else {
+                Vec::new()
+            };
+            let reverted = reverse_apply_hunks_to_content(&index_content, &file_diff.hunks);
+            let blob = git_object::Blob { data: reverted };
+            let new_oid = repo.odb().write(&Object::Blob(blob))?;
+            let mode = file_diff.old_mode.unwrap_or(FileMode::Regular);
+            let entry = IndexEntry {
+                path: path.clone(),
+                oid: new_oid,
+                mode,
+                stage: Stage::Normal,
+                stat: StatData::default(),
+                flags: EntryFlags::default(),
+            };
+            let index = repo.index_mut()?;
+            index.add(entry);
+        }
+        repo.write_index()?;
+        return Ok(0);
+    }
 
     // Parse args: disambiguate commit vs paths
     let (commit, paths) = parse_reset_args(&args.args, &repo);

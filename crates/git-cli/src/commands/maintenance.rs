@@ -262,29 +262,326 @@ fn run_start(cli: &Cli, _scheduler: Option<&str>) -> Result<i32> {
     let repo = open_repo(cli)?;
     let git_dir = repo.git_dir().to_path_buf();
 
-    // Register the repo and set up a cron/launchd job
-    // For now, write a marker file indicating maintenance is enabled
+    // Determine the repo work directory (fall back to parent of .git dir)
+    let repo_path = repo
+        .work_tree()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| {
+            git_dir
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| git_dir.clone())
+        });
+    let repo_path = std::fs::canonicalize(&repo_path)
+        .unwrap_or(repo_path);
+
+    // Write local marker
     let maintenance_dir = git_dir.join("maintenance");
     std::fs::create_dir_all(&maintenance_dir)?;
     std::fs::write(maintenance_dir.join("enabled"), "true\n")?;
 
-    eprintln!("gitr: background maintenance started (stub)");
-    eprintln!("hint: full cron/launchd integration is not yet implemented");
+    // Register the repo in ~/.config/git/maintenance.repos
+    register_repo_in_config(&repo_path)?;
+
+    // Set up platform-specific scheduler
+    let platform = std::env::consts::OS;
+    match platform {
+        "macos" => setup_launchd(&repo_path)?,
+        "linux" => setup_crontab()?,
+        _ => {
+            eprintln!(
+                "gitr: platform '{}' is not supported for background maintenance",
+                platform
+            );
+            return Ok(0);
+        }
+    }
+
+    eprintln!("gitr: background maintenance started for '{}'", repo_path.display());
 
     Ok(0)
+}
+
+/// Register a repo path in ~/.config/git/maintenance.repos (append if not present).
+fn register_repo_in_config(repo_path: &std::path::Path) -> Result<()> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| String::from("/root"));
+    let config_dir = std::path::PathBuf::from(&home)
+        .join(".config")
+        .join("git");
+    std::fs::create_dir_all(&config_dir)?;
+
+    let repos_file = config_dir.join("maintenance.repos");
+    let repo_str = repo_path.to_string_lossy().to_string();
+
+    // Read existing entries
+    let existing = std::fs::read_to_string(&repos_file).unwrap_or_default();
+    let already_present = existing
+        .lines()
+        .any(|line| line.trim() == repo_str);
+
+    if !already_present {
+        use std::fs::OpenOptions;
+        let mut f = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&repos_file)?;
+        writeln!(f, "{}", repo_str)?;
+    }
+
+    Ok(())
+}
+
+/// Remove a repo path from ~/.config/git/maintenance.repos.
+fn unregister_repo_from_config(repo_path: &std::path::Path) -> Result<()> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| String::from("/root"));
+    let repos_file = std::path::PathBuf::from(&home)
+        .join(".config")
+        .join("git")
+        .join("maintenance.repos");
+
+    if !repos_file.exists() {
+        return Ok(());
+    }
+
+    let repo_str = repo_path.to_string_lossy().to_string();
+    let existing = std::fs::read_to_string(&repos_file)?;
+    let filtered: Vec<&str> = existing
+        .lines()
+        .filter(|line| line.trim() != repo_str)
+        .collect();
+    std::fs::write(&repos_file, filtered.join("\n") + if filtered.is_empty() { "" } else { "\n" })?;
+
+    Ok(())
+}
+
+/// Generate and load a launchd plist for macOS.
+fn setup_launchd(repo_path: &std::path::Path) -> Result<()> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| String::from("/root"));
+    let launch_agents = std::path::PathBuf::from(&home).join("Library").join("LaunchAgents");
+    std::fs::create_dir_all(&launch_agents)?;
+
+    let plist_path = launch_agents.join("org.git-scm.git.maintenance.plist");
+
+    // Find the gitr binary path
+    let gitr_bin = std::env::current_exe()
+        .unwrap_or_else(|_| std::path::PathBuf::from("gitr"));
+
+    let plist_content = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>org.git-scm.git.maintenance</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{}</string>
+        <string>maintenance</string>
+        <string>run</string>
+        <string>--auto</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>3600</integer>
+    <key>StandardOutPath</key>
+    <string>/tmp/gitr-maintenance.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/gitr-maintenance.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>
+"#,
+        gitr_bin.display()
+    );
+
+    // If the plist already exists and is loaded, unload first to avoid errors
+    if plist_path.exists() {
+        let _ = std::process::Command::new("launchctl")
+            .args(["unload", &plist_path.to_string_lossy()])
+            .status();
+    }
+
+    std::fs::write(&plist_path, &plist_content)?;
+
+    let status = std::process::Command::new("launchctl")
+        .args(["load", &plist_path.to_string_lossy()])
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {}
+        Ok(s) => {
+            eprintln!(
+                "warning: launchctl load exited with status {}",
+                s.code().unwrap_or(-1)
+            );
+        }
+        Err(e) => {
+            eprintln!("warning: failed to run launchctl: {}", e);
+        }
+    }
+
+    let _ = repo_path; // used by caller for registration
+    Ok(())
+}
+
+/// Remove the launchd plist for macOS.
+fn teardown_launchd() -> Result<()> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| String::from("/root"));
+    let plist_path = std::path::PathBuf::from(&home)
+        .join("Library")
+        .join("LaunchAgents")
+        .join("org.git-scm.git.maintenance.plist");
+
+    if plist_path.exists() {
+        let _ = std::process::Command::new("launchctl")
+            .args(["unload", &plist_path.to_string_lossy()])
+            .status();
+        std::fs::remove_file(&plist_path)?;
+    }
+
+    Ok(())
+}
+
+/// Set up crontab entries for Linux.
+fn setup_crontab() -> Result<()> {
+    let marker = "# gitr maintenance";
+
+    // Read existing crontab
+    let output = std::process::Command::new("crontab")
+        .arg("-l")
+        .output();
+
+    let existing = match output {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        _ => String::new(),
+    };
+
+    // Check if already present
+    if existing.contains(marker) {
+        return Ok(());
+    }
+
+    let cron_entries = format!(
+        "{marker}\n\
+         0 * * * * gitr maintenance run --schedule=hourly\n\
+         0 0 * * * gitr maintenance run --schedule=daily\n\
+         0 0 * * 0 gitr maintenance run --schedule=weekly\n"
+    );
+
+    let new_crontab = if existing.is_empty() {
+        cron_entries
+    } else {
+        format!("{}\n{}", existing.trim_end(), cron_entries)
+    };
+
+    // Write new crontab via pipe to `crontab -`
+    let mut child = std::process::Command::new("crontab")
+        .arg("-")
+        .stdin(std::process::Stdio::piped())
+        .spawn()?;
+
+    if let Some(ref mut stdin) = child.stdin {
+        stdin.write_all(new_crontab.as_bytes())?;
+    }
+
+    let status = child.wait()?;
+    if !status.success() {
+        eprintln!(
+            "warning: crontab exited with status {}",
+            status.code().unwrap_or(-1)
+        );
+    }
+
+    Ok(())
+}
+
+/// Remove gitr maintenance entries from crontab on Linux.
+fn teardown_crontab() -> Result<()> {
+    let marker = "# gitr maintenance";
+
+    let output = std::process::Command::new("crontab")
+        .arg("-l")
+        .output();
+
+    let existing = match output {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        _ => return Ok(()),
+    };
+
+    if !existing.contains(marker) {
+        return Ok(());
+    }
+
+    // Filter out the marker line and the three schedule lines that follow it
+    let mut filtered = Vec::new();
+    let mut skip_count = 0u32;
+    for line in existing.lines() {
+        if line.trim() == marker {
+            // Skip this line and the next 3 cron entries
+            skip_count = 3;
+            continue;
+        }
+        if skip_count > 0 {
+            skip_count -= 1;
+            continue;
+        }
+        filtered.push(line);
+    }
+
+    let new_crontab = filtered.join("\n") + if filtered.is_empty() { "" } else { "\n" };
+
+    let mut child = std::process::Command::new("crontab")
+        .arg("-")
+        .stdin(std::process::Stdio::piped())
+        .spawn()?;
+
+    if let Some(ref mut stdin) = child.stdin {
+        stdin.write_all(new_crontab.as_bytes())?;
+    }
+
+    let _ = child.wait()?;
+
+    Ok(())
 }
 
 fn run_stop(cli: &Cli, _scheduler: Option<&str>) -> Result<i32> {
     let repo = open_repo(cli)?;
     let git_dir = repo.git_dir().to_path_buf();
 
-    let maintenance_dir = git_dir.join("maintenance");
-    let enabled_file = maintenance_dir.join("enabled");
-    if enabled_file.exists() {
-        std::fs::remove_file(&enabled_file)?;
+    // Determine the repo work directory
+    let repo_path = repo
+        .work_tree()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| {
+            git_dir
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| git_dir.clone())
+        });
+    let repo_path = std::fs::canonicalize(&repo_path)
+        .unwrap_or(repo_path);
+
+    // Tear down platform-specific scheduler
+    let platform = std::env::consts::OS;
+    match platform {
+        "macos" => teardown_launchd()?,
+        "linux" => teardown_crontab()?,
+        _ => {}
     }
 
-    eprintln!("gitr: background maintenance stopped (stub)");
+    // Remove repo from global maintenance.repos
+    unregister_repo_from_config(&repo_path)?;
+
+    // Clean up local .git/maintenance/ directory
+    let maintenance_dir = git_dir.join("maintenance");
+    if maintenance_dir.exists() {
+        std::fs::remove_dir_all(&maintenance_dir)?;
+    }
+
+    eprintln!("gitr: background maintenance stopped for '{}'", repo_path.display());
 
     Ok(0)
 }

@@ -184,24 +184,15 @@ pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
     let effective_mode = color_config.effective_mode("log", cli_color_mode);
     let color_enabled = git_utils::color::use_color(effective_mode, io::stdout().is_terminal());
 
-    // Accept flags that are not fully implemented yet
-    if args.left_right {
-        eprintln!("warning: --left-right is accepted but not yet implemented");
+    // Validate flag combinations
+    if args.follow && pathspecs_from_args(&args.revisions, &args.path_args).len() > 1 {
+        anyhow::bail!("--follow requires exactly one path");
     }
-    if args.cherry_pick {
-        eprintln!("warning: --cherry-pick is accepted but not yet implemented");
-    }
-    if args.cherry_mark {
-        eprintln!("warning: --cherry-mark is accepted but not yet implemented");
-    }
-    if args.ancestry_path {
-        eprintln!("warning: --ancestry-path is accepted but not yet implemented");
-    }
-    if args.source {
-        eprintln!("warning: --source is accepted but not yet implemented");
-    }
-    if args.follow {
-        eprintln!("warning: --follow is accepted but not yet implemented");
+    if (args.cherry_pick || args.cherry_mark || args.left_right)
+        && !args.revisions.iter().any(|r| r.contains("..."))
+    {
+        // These flags require a symmetric range (A...B)
+        // If no symmetric range provided, they're silently ignored (matching git behavior)
     }
 
     // Load mailmap if requested
@@ -240,6 +231,19 @@ pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
         author_pattern: args.author.clone(),
         grep_pattern: args.grep.clone(),
         first_parent_only: args.first_parent,
+        left_right: args.left_right,
+        cherry_pick: args.cherry_pick,
+        cherry_mark: args.cherry_mark,
+        ancestry_path: args.ancestry_path,
+        source: args.source,
+        follow_path: if args.follow {
+            pathspecs_from_args(&args.revisions, &args.path_args)
+                .into_iter()
+                .next()
+                .map(bstr::BString::from)
+        } else {
+            None
+        },
         ..WalkOptions::default()
     };
     if args.reverse {
@@ -255,6 +259,7 @@ pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
 
     // Set up revision walker
     let mut walker = RevWalk::new(&repo)?;
+    let follow_path = walk_opts.follow_path.clone();
     walker.set_options(walk_opts);
 
     // Parse pathspec: use path_args (after --) plus any remaining from revisions after --
@@ -272,6 +277,38 @@ pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
             revs.push(arg.clone());
         }
     }
+
+    // Detect symmetric range for left-right/cherry-pick/cherry-mark
+    let symmetric_range = if args.left_right || args.cherry_pick || args.cherry_mark {
+        revs.iter().find(|r| r.contains("...")).cloned()
+    } else {
+        None
+    };
+
+    // Build commit annotation map for symmetric diff flags
+    let mut commit_annotations: HashMap<ObjectId, (char, git_revwalk::DiffSide)> = HashMap::new();
+    if let Some(ref sym_range) = symmetric_range {
+        let parts: Vec<&str> = sym_range.splitn(2, "...").collect();
+        if parts.len() == 2 {
+            let left_rev = if parts[0].is_empty() { "HEAD" } else { parts[0] };
+            let right_rev = if parts[1].is_empty() { "HEAD" } else { parts[1] };
+            let left_oid = git_revwalk::resolve_revision(&repo, left_rev)?;
+            let right_oid = git_revwalk::resolve_revision(&repo, right_rev)?;
+
+            let (left_entries, right_entries) =
+                git_revwalk::symmetric_diff_with_cherry(&repo, &left_oid, &right_oid)?;
+
+            for entry in &left_entries {
+                commit_annotations.insert(entry.oid, (entry.marker, git_revwalk::DiffSide::Left));
+            }
+            for entry in &right_entries {
+                commit_annotations.insert(entry.oid, (entry.marker, git_revwalk::DiffSide::Right));
+            }
+        }
+    }
+
+    // Build source ref tracking map (for --source)
+    let mut source_map: HashMap<ObjectId, String> = HashMap::new();
 
     if args.all {
         walker.push_all()?;
@@ -302,6 +339,22 @@ pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
             } else {
                 let oid = git_revwalk::resolve_revision(&repo, rev)?;
                 walker.push(oid)?;
+                // Track source ref for --source
+                if args.source {
+                    source_map.insert(oid, rev.clone());
+                }
+            }
+        }
+    }
+
+    // For --source with --all, build source tracking from all refs
+    if args.source && args.all {
+        if let Ok(refs) = repo.refs().iter(None) {
+            for r in refs.flatten() {
+                if let Some(oid) = r.target_oid() {
+                    let name = r.name().as_str().to_string();
+                    source_map.entry(oid).or_insert(name);
+                }
             }
         }
     }
@@ -341,6 +394,19 @@ pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
     for oid_result in walker {
         let oid = oid_result?;
 
+        // For symmetric diff flags: filter/annotate using commit_annotations map
+        if !commit_annotations.is_empty() {
+            if let Some(&(marker, _side)) = commit_annotations.get(&oid) {
+                // --cherry-pick: omit equivalent commits
+                if args.cherry_pick && marker == '=' {
+                    continue;
+                }
+            } else {
+                // Commit not in symmetric diff — skip it if we're doing symmetric diff filtering
+                continue;
+            }
+        }
+
         let obj = repo
             .odb()
             .read(&oid)?
@@ -366,14 +432,12 @@ pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
                     continue;
                 }
             } else {
-                // Build a temporary decoration map to check
-                // (shouldn't normally happen since --simplify-by-decoration implies decorations)
                 continue;
             }
         }
 
         // Filter by pathspec: skip commits that don't touch any of the given paths
-        if !pathspecs.is_empty() {
+        if !pathspecs.is_empty() && !args.follow {
             let parent_tree = commit.first_parent().and_then(|p| {
                 repo.odb().read(p).ok().flatten().and_then(|o| match o {
                     Object::Commit(c) => Some(c.tree),
@@ -381,6 +445,32 @@ pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
                 })
             });
             let diff_opts = DiffOptions::default();
+            if let Ok(result) = git_diff::tree::diff_trees(
+                repo.odb(),
+                parent_tree.as_ref(),
+                Some(&commit.tree),
+                &diff_opts,
+            ) {
+                let touches_path = result.files.iter().any(|f| {
+                    let path = f.path().to_str_lossy();
+                    pathspecs.iter().any(|ps| path.starts_with(ps.as_str()))
+                });
+                if !touches_path {
+                    continue;
+                }
+            }
+        }
+
+        // --follow: filter by followed path, detecting renames
+        if args.follow && follow_path.is_some() {
+            // The follow path is also used as a pathspec for filtering
+            let parent_tree = commit.first_parent().and_then(|p| {
+                repo.odb().read(p).ok().flatten().and_then(|o| match o {
+                    Object::Commit(c) => Some(c.tree),
+                    _ => None,
+                })
+            });
+            let diff_opts = DiffOptions { detect_renames: true, ..Default::default() };
             if let Ok(result) = git_diff::tree::diff_trees(
                 repo.odb(),
                 parent_tree.as_ref(),
@@ -435,6 +525,37 @@ pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
             format_commit_with_decorations(&commit, &oid, fmt, &format_options, decorations.as_ref())
         } else {
             format_builtin_with_decorations(&commit, &oid, builtin, &format_options, decorations.as_ref())
+        };
+
+        // Add prefix annotations for --left-right, --cherry-mark, --source
+        let formatted = {
+            let mut prefix = String::new();
+            if let Some(&(marker, side)) = commit_annotations.get(&oid) {
+                if args.left_right {
+                    match side {
+                        git_revwalk::DiffSide::Left => prefix.push_str("< "),
+                        git_revwalk::DiffSide::Right => prefix.push_str("> "),
+                    }
+                }
+                if args.cherry_mark {
+                    prefix.push(marker);
+                    prefix.push(' ');
+                }
+            }
+            if args.source {
+                if let Some(ref src) = source_map.get(&oid) {
+                    // Source is appended after the first line's commit hash
+                    // For simplicity, prepend it
+                    if prefix.is_empty() {
+                        prefix.push_str(&format!("{}\t", src));
+                    }
+                }
+            }
+            if prefix.is_empty() {
+                formatted
+            } else {
+                format!("{}{}", prefix, formatted)
+            }
         };
 
         // Add separator between commits for multi-line formats
@@ -963,4 +1084,20 @@ fn walk_reflogs_mode(
     }
 
     Ok(0)
+}
+
+/// Extract pathspecs from revision args and path_args.
+fn pathspecs_from_args(revisions: &[String], path_args: &[String]) -> Vec<String> {
+    let mut pathspecs: Vec<String> = path_args.to_vec();
+    let mut saw_separator = false;
+    for arg in revisions {
+        if arg == "--" {
+            saw_separator = true;
+            continue;
+        }
+        if saw_separator {
+            pathspecs.push(arg.clone());
+        }
+    }
+    pathspecs
 }

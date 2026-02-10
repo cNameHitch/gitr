@@ -5,9 +5,11 @@ use anyhow::{bail, Result};
 use bstr::{BString, ByteSlice};
 use clap::Args;
 use git_index::{EntryFlags, IgnoreStack, IndexEntry, Stage, StatData};
-use git_object::{FileMode, ObjectType};
+use git_object::{FileMode, Object, ObjectType};
 
 use crate::Cli;
+use crate::interactive::{InteractiveHunkSelector, apply_hunks_to_content};
+use git_diff::{DiffOptions, worktree::diff_index_to_worktree};
 use super::open_repo;
 
 #[derive(Args)]
@@ -32,6 +34,10 @@ pub struct AddArgs {
     #[arg(short, long)]
     verbose: bool,
 
+    /// Interactively select hunks to add
+    #[arg(short = 'p', long)]
+    patch: bool,
+
     /// Files to add
     #[arg(value_name = "pathspec")]
     files: Vec<String>,
@@ -43,6 +49,54 @@ pub fn run(args: &AddArgs, cli: &Cli) -> Result<i32> {
         .work_tree()
         .ok_or_else(|| anyhow::anyhow!("this operation must be run in a work tree"))?
         .to_path_buf();
+
+    if args.patch {
+        let diff_result = diff_index_to_worktree(&mut repo, &DiffOptions::default())?;
+        if diff_result.files.is_empty() {
+            eprintln!("No changes.");
+            return Ok(0);
+        }
+        let mut selector = InteractiveHunkSelector::new()?;
+        let selected = selector.select_hunks(&diff_result)?;
+        for file_diff in &selected.files {
+            let path = file_diff.path();
+            // Read the current index content (old side of the diff)
+            let index_oid = {
+                let index = repo.index()?;
+                index.get(path.as_ref(), Stage::Normal).map(|e| e.oid)
+            };
+            let old_content = if let Some(oid) = index_oid {
+                match repo.odb().read(&oid)? {
+                    Some(Object::Blob(b)) => b.data.to_vec(),
+                    _ => Vec::new(),
+                }
+            } else {
+                Vec::new()
+            };
+            let patched = apply_hunks_to_content(&old_content, &file_diff.hunks);
+            let blob = git_object::Blob { data: patched };
+            let new_oid = repo.odb().write(&Object::Blob(blob))?;
+            let mode = file_diff.new_mode.unwrap_or(FileMode::Regular);
+            let fs_path = work_tree.join(path.to_str_lossy().as_ref());
+            let stat = if fs_path.exists() {
+                StatData::from_metadata(&std::fs::symlink_metadata(&fs_path)?)
+            } else {
+                StatData::default()
+            };
+            let entry = IndexEntry {
+                path: path.clone(),
+                oid: new_oid,
+                mode,
+                stage: Stage::Normal,
+                stat,
+                flags: EntryFlags::default(),
+            };
+            let index = repo.index_mut()?;
+            index.add(entry);
+        }
+        repo.write_index()?;
+        return Ok(0);
+    }
 
     // Build ignore stack
     let mut ignores = IgnoreStack::new();

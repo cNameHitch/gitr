@@ -48,6 +48,38 @@ pub struct WalkOptions {
     pub author_pattern: Option<String>,
     pub committer_pattern: Option<String>,
     pub grep_pattern: Option<String>,
+    /// Show `<`/`>` markers for symmetric diff.
+    pub left_right: bool,
+    /// Omit equivalent commits in symmetric diff (comparing patch IDs).
+    pub cherry_pick: bool,
+    /// Mark equivalent commits with `=` vs `+` in symmetric diff.
+    pub cherry_mark: bool,
+    /// Track which ref led to each commit (--source).
+    pub source: bool,
+    /// Rename-following path for --follow (single file only).
+    pub follow_path: Option<bstr::BString>,
+}
+
+/// Side of a symmetric diff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffSide {
+    /// Reachable from the left side only (displayed as `<`).
+    Left,
+    /// Reachable from the right side only (displayed as `>`).
+    Right,
+}
+
+/// A commit annotated with symmetric diff metadata.
+#[derive(Debug, Clone)]
+pub struct SymmetricDiffCommit {
+    pub commit_id: ObjectId,
+    pub side: DiffSide,
+    /// Hash of the commit's diff (for cherry equivalence).
+    pub patch_id: Option<String>,
+    /// True if patch-id matches a commit on the other side.
+    pub is_equivalent: bool,
+    /// Ref through which this commit was discovered (--source).
+    pub source_ref: Option<String>,
 }
 
 /// An entry in the walk priority queue.

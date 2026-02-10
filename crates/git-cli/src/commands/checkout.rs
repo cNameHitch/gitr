@@ -67,6 +67,24 @@ pub struct CheckoutArgs {
 }
 
 pub fn run(args: &CheckoutArgs, cli: &Cli) -> Result<i32> {
+    // If -p is given, delegate to restore -p
+    if args.patch {
+        let restore_args = restore::RestoreArgs {
+            staged: false,
+            worktree: true,
+            source: None,
+            overlay: false,
+            no_overlay: false,
+            conflict: None,
+            ours: false,
+            theirs: false,
+            pathspec_from_file: None,
+            patch: true,
+            files: Vec::new(),
+        };
+        return restore::run(&restore_args, cli);
+    }
+
     // If paths are given after --, this is a file checkout (restore)
     if !args.paths.is_empty() {
         let mut files = args.paths.clone();

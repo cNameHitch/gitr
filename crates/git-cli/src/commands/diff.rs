@@ -140,13 +140,14 @@ pub struct DiffArgs {
 }
 
 pub fn run(args: &DiffArgs, cli: &Cli) -> Result<i32> {
-    // --no-index: TODO not yet implemented (requires comparing two arbitrary paths)
+    // --no-index: compare two paths without requiring a git repo
     if args.no_index {
-        eprintln!("warning: --no-index is accepted but not yet implemented");
+        return run_no_index(args);
     }
-    // --check: TODO not yet implemented (whitespace error checking)
+
+    // --check: whitespace error checking mode
     if args.check {
-        eprintln!("warning: --check is accepted but not yet implemented");
+        return run_check(args, cli);
     }
 
     let mut repo = open_repo(cli)?;
@@ -621,4 +622,244 @@ fn rewrite_prefixes(output: &str, src: &str, dst: &str) -> String {
 /// length it has available, so this is effectively a pass-through.
 fn expand_index_oids(output: &str) -> String {
     output.to_string()
+}
+
+/// Run `diff --no-index`: compare two paths outside a git repository.
+fn run_no_index(args: &DiffArgs) -> Result<i32> {
+    if args.args.len() < 2 {
+        anyhow::bail!("usage: gitr diff --no-index <path1> <path2>");
+    }
+
+    let path_a = std::path::Path::new(&args.args[0]);
+    let path_b = std::path::Path::new(&args.args[1]);
+
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+
+    let mut diff_opts = DiffOptions {
+        output_format: determine_output_format(args),
+        ..DiffOptions::default()
+    };
+    if let Some(ctx) = args.context_lines {
+        diff_opts.context_lines = ctx;
+    }
+    if args.patience {
+        diff_opts.algorithm = DiffAlgorithm::Patience;
+    } else if args.histogram {
+        diff_opts.algorithm = DiffAlgorithm::Histogram;
+    } else if args.minimal {
+        diff_opts.algorithm = DiffAlgorithm::Minimal;
+    }
+
+    let mut has_diff = false;
+
+    if path_a.is_file() && path_b.is_file() {
+        // Compare two files
+        let data_a = std::fs::read(path_a)?;
+        let data_b = std::fs::read(path_b)?;
+
+        let is_binary = git_diff::binary::is_binary(&data_a) || git_diff::binary::is_binary(&data_b);
+        if data_a != data_b {
+            has_diff = true;
+            if !args.quiet {
+                if is_binary {
+                    writeln!(out, "Binary files {} and {} differ",
+                             path_a.display(), path_b.display())?;
+                } else {
+                    let hunks = git_diff::algorithm::diff_lines(
+                        &data_a, &data_b, diff_opts.algorithm, diff_opts.context_lines,
+                    );
+                    let file_diff = git_diff::FileDiff {
+                        status: git_diff::FileStatus::Modified,
+                        old_path: Some(bstr::BString::from(path_a.to_string_lossy().as_ref())),
+                        new_path: Some(bstr::BString::from(path_b.to_string_lossy().as_ref())),
+                        old_mode: Some(git_object::FileMode::Regular),
+                        new_mode: Some(git_object::FileMode::Regular),
+                        old_oid: None,
+                        new_oid: None,
+                        hunks,
+                        is_binary: false,
+                        similarity: None,
+                    };
+                    let result = git_diff::DiffResult { files: vec![file_diff] };
+                    let output = format_diff(&result, &diff_opts);
+                    write!(out, "{}", output)?;
+                }
+            }
+        }
+    } else if path_a.is_dir() && path_b.is_dir() {
+        // Compare two directories recursively
+        has_diff = diff_dirs_recursive(path_a, path_b, &diff_opts, &mut out, args.quiet)?;
+    } else {
+        anyhow::bail!(
+            "--no-index requires two files or two directories; got {} and {}",
+            if path_a.exists() { if path_a.is_dir() { "directory" } else { "file" } } else { "missing" },
+            if path_b.exists() { if path_b.is_dir() { "directory" } else { "file" } } else { "missing" },
+        );
+    }
+
+    // Exit code: 0 = identical, 1 = different
+    Ok(if has_diff { 1 } else { 0 })
+}
+
+/// Recursively diff two directories.
+fn diff_dirs_recursive(
+    dir_a: &std::path::Path,
+    dir_b: &std::path::Path,
+    diff_opts: &DiffOptions,
+    out: &mut impl Write,
+    quiet: bool,
+) -> Result<bool> {
+    let mut has_diff = false;
+    let mut entries_a = std::collections::BTreeSet::new();
+    let mut entries_b = std::collections::BTreeSet::new();
+
+    if dir_a.exists() {
+        for entry in std::fs::read_dir(dir_a)? {
+            let entry = entry?;
+            entries_a.insert(entry.file_name().to_string_lossy().to_string());
+        }
+    }
+    if dir_b.exists() {
+        for entry in std::fs::read_dir(dir_b)? {
+            let entry = entry?;
+            entries_b.insert(entry.file_name().to_string_lossy().to_string());
+        }
+    }
+
+    let all_names: std::collections::BTreeSet<&String> = entries_a.iter().chain(entries_b.iter()).collect();
+
+    for name in all_names {
+        let pa = dir_a.join(name);
+        let pb = dir_b.join(name);
+
+        if pa.is_dir() || pb.is_dir() {
+            if diff_dirs_recursive(&pa, &pb, diff_opts, out, quiet)? {
+                has_diff = true;
+            }
+        } else {
+            let data_a = if pa.exists() { std::fs::read(&pa)? } else { Vec::new() };
+            let data_b = if pb.exists() { std::fs::read(&pb)? } else { Vec::new() };
+
+            if data_a != data_b {
+                has_diff = true;
+                if !quiet {
+                    let is_binary = git_diff::binary::is_binary(&data_a) || git_diff::binary::is_binary(&data_b);
+                    if is_binary {
+                        writeln!(out, "Binary files {} and {} differ", pa.display(), pb.display())?;
+                    } else {
+                        let hunks = git_diff::algorithm::diff_lines(
+                            &data_a, &data_b, diff_opts.algorithm, diff_opts.context_lines,
+                        );
+                        let status = if !pa.exists() {
+                            git_diff::FileStatus::Added
+                        } else if !pb.exists() {
+                            git_diff::FileStatus::Deleted
+                        } else {
+                            git_diff::FileStatus::Modified
+                        };
+                        let file_diff = git_diff::FileDiff {
+                            status,
+                            old_path: Some(bstr::BString::from(pa.to_string_lossy().as_ref())),
+                            new_path: Some(bstr::BString::from(pb.to_string_lossy().as_ref())),
+                            old_mode: Some(git_object::FileMode::Regular),
+                            new_mode: Some(git_object::FileMode::Regular),
+                            old_oid: None,
+                            new_oid: None,
+                            hunks,
+                            is_binary: false,
+                            similarity: None,
+                        };
+                        let result = git_diff::DiffResult { files: vec![file_diff] };
+                        let output = format_diff(&result, diff_opts);
+                        write!(out, "{}", output)?;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(has_diff)
+}
+
+/// Run `diff --check`: check for whitespace errors in diff output.
+fn run_check(args: &DiffArgs, cli: &Cli) -> Result<i32> {
+    let mut repo = open_repo(cli)?;
+    let stderr = io::stderr();
+    let mut err = stderr.lock();
+
+    let mut diff_opts = DiffOptions {
+        output_format: DiffOutputFormat::Unified,
+        detect_renames: args.find_renames.is_some(),
+        rename_threshold: args.find_renames.unwrap_or(50),
+        ..DiffOptions::default()
+    };
+    if let Some(ctx) = args.context_lines {
+        diff_opts.context_lines = ctx;
+    }
+
+    let is_cached = args.cached || args.staged;
+    let (commits, _pathspecs) = parse_diff_args(&args.args, &repo);
+
+    let result = if commits.len() == 2 {
+        let oid_a = git_revwalk::resolve_revision(&repo, &commits[0])?;
+        let oid_b = git_revwalk::resolve_revision(&repo, &commits[1])?;
+        let tree_a = get_commit_tree(&repo, &oid_a)?;
+        let tree_b = get_commit_tree(&repo, &oid_b)?;
+        git_diff::tree::diff_trees(repo.odb(), Some(&tree_a), Some(&tree_b), &diff_opts)?
+    } else if is_cached {
+        git_diff::worktree::diff_head_to_index(&mut repo, &diff_opts)?
+    } else {
+        git_diff::worktree::diff_index_to_worktree(&mut repo, &diff_opts)?
+    };
+
+    let mut error_count = 0;
+
+    for file in &result.files {
+        let path = file.path();
+        for hunk in &file.hunks {
+            let mut new_line_num = hunk.new_start;
+            for line in &hunk.lines {
+                match line {
+                    git_diff::DiffLine::Addition(content) => {
+                        let content_str = String::from_utf8_lossy(content);
+                        let trimmed = content_str.trim_end_matches('\n').trim_end_matches('\r');
+                        // Check for trailing whitespace
+                        if trimmed != trimmed.trim_end() {
+                            writeln!(
+                                err,
+                                "{}:{}: trailing whitespace.",
+                                path.to_str_lossy(),
+                                new_line_num
+                            )?;
+                            error_count += 1;
+                        }
+                        // Check for space-before-tab in indent
+                        let indent: String = trimmed.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+                        if indent.contains(' ') && indent.contains('\t') {
+                            let space_pos = indent.find(' ').unwrap_or(0);
+                            let tab_pos = indent.find('\t').unwrap_or(0);
+                            if space_pos < tab_pos {
+                                writeln!(
+                                    err,
+                                    "{}:{}: space before tab in indent.",
+                                    path.to_str_lossy(),
+                                    new_line_num
+                                )?;
+                                error_count += 1;
+                            }
+                        }
+                        new_line_num += 1;
+                    }
+                    git_diff::DiffLine::Context(_) => {
+                        new_line_num += 1;
+                    }
+                    git_diff::DiffLine::Deletion(_) => {}
+                }
+            }
+        }
+    }
+
+    // Exit code 2 if errors found, 0 otherwise
+    Ok(if error_count > 0 { 2 } else { 0 })
 }

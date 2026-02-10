@@ -1,10 +1,8 @@
-use std::io::{self, Write};
-
 use anyhow::Result;
 use clap::Args;
 
 use crate::Cli;
-use super::{fetch, merge};
+use super::{fetch, merge, rebase};
 
 #[derive(Args)]
 pub struct PullArgs {
@@ -104,9 +102,6 @@ pub struct PullArgs {
 }
 
 pub fn run(args: &PullArgs, cli: &Cli) -> Result<i32> {
-    let stderr = io::stderr();
-    let mut err = stderr.lock();
-
     // Step 1: Fetch
     let remote = args.remote.as_deref().unwrap_or("origin");
     let fetch_args = fetch::FetchArgs {
@@ -150,12 +145,44 @@ pub fn run(args: &PullArgs, cli: &Cli) -> Result<i32> {
         format!("{}/{}", remote, current)
     };
 
+    // Check pull.rebase config as default
+    let use_rebase = if args.no_rebase {
+        false
+    } else if args.rebase {
+        true
+    } else {
+        // Check pull.rebase config
+        let repo = super::open_repo(cli)?;
+        let pull_rebase = repo.config().get_bool("pull.rebase").unwrap_or(Some(false));
+        drop(repo);
+        pull_rebase.unwrap_or(false)
+    };
+
     // Step 3: Merge (or rebase)
-    if args.rebase {
-        // TODO: rebase support
-        if !args.quiet {
-            writeln!(err, "pull --rebase is not yet fully implemented, falling back to merge")?;
-        }
+    if use_rebase {
+        let rebase_args = rebase::RebaseArgs {
+            onto: None,
+            abort: false,
+            r#continue: false,
+            skip: false,
+            interactive: false,
+            quiet: args.quiet,
+            verbose: args.verbose,
+            signoff: false,
+            force_rebase: false,
+            autosquash: false,
+            no_autosquash: false,
+            autostash: args.autostash,
+            no_autostash: false,
+            update_refs: false,
+            exec: None,
+            root: false,
+            strategy: args.strategy.clone(),
+            strategy_option: args.strategy_option.clone(),
+            upstream: Some(merge_branch),
+        };
+
+        return rebase::run(&rebase_args, cli);
     }
 
     let merge_args = merge::MergeArgs {

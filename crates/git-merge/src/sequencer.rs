@@ -9,6 +9,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use git_hash::ObjectId;
+use git_object::Object;
+use git_ref::RefStore;
 use git_repository::Repository;
 
 use crate::cherry_pick;
@@ -30,16 +32,26 @@ pub enum SequencerAction {
     Pick,
     /// Revert the commit.
     Revert,
+    /// Apply then reword the commit message.
+    Reword,
     /// Apply then stop for editing.
     Edit,
     /// Squash into previous commit.
     Squash,
     /// Fixup (squash without changing message).
     Fixup,
+    /// Drop the commit entirely.
+    Drop,
     /// Execute a shell command.
     Exec(String),
     /// Stop for manual intervention.
     Break,
+    /// Set a label for later reference.
+    Label(String),
+    /// Reset HEAD to a label.
+    Reset(String),
+    /// Merge a branch.
+    Merge,
 }
 
 /// A single entry in the sequencer todo list.
@@ -49,6 +61,40 @@ pub struct SequencerEntry {
     pub commit: ObjectId,
     /// The action to perform.
     pub action: SequencerAction,
+}
+
+/// A single entry in an interactive rebase todo list.
+#[derive(Debug, Clone)]
+pub struct RebaseTodoEntry {
+    /// The action to perform.
+    pub action: SequencerAction,
+    /// The commit ID (None for exec, break, label, reset).
+    pub commit_id: Option<ObjectId>,
+    /// Short hash for display (7 chars).
+    pub short_hash: String,
+    /// Commit subject line.
+    pub subject: String,
+    /// The original line from the todo file (for comments/empty lines).
+    pub original_line: Option<String>,
+}
+
+/// State for an interactive rebase in progress.
+#[derive(Debug, Clone)]
+pub struct RebaseState {
+    /// Remaining todo entries.
+    pub todo_entries: Vec<RebaseTodoEntry>,
+    /// Number of completed entries.
+    pub done_count: usize,
+    /// Original HEAD before rebase started.
+    pub original_head: ObjectId,
+    /// The commit to rebase onto.
+    pub onto: ObjectId,
+    /// Branch name being rebased (e.g., "refs/heads/main").
+    pub head_name: String,
+    /// Accumulated fixup/squash message.
+    pub current_fixup_message: Option<String>,
+    /// Whether autosquash was enabled.
+    pub autosquash: bool,
 }
 
 /// Result of a sequencer step.
@@ -155,10 +201,29 @@ impl Sequencer {
                     self.current += 1;
                     continue;
                 }
+                SequencerAction::Reword => {
+                    let result = cherry_pick::cherry_pick(repo, &entry.commit, &self.options)?;
+                    // Pause for message editing (handled by the caller).
+                    self.save()?;
+                    return Ok(SequencerResult::Paused {
+                        current_index: self.current,
+                        result,
+                    });
+                }
                 SequencerAction::Squash | SequencerAction::Fixup => {
                     // For squash/fixup, apply the commit but mark for
                     // message combination (handled by the caller).
                     cherry_pick::cherry_pick(repo, &entry.commit, &self.options)?
+                }
+                SequencerAction::Drop => {
+                    // Skip this commit entirely.
+                    self.current += 1;
+                    continue;
+                }
+                SequencerAction::Label(_) | SequencerAction::Reset(_) | SequencerAction::Merge => {
+                    // Handled by interactive rebase caller.
+                    self.current += 1;
+                    continue;
                 }
             };
 
@@ -189,12 +254,111 @@ impl Sequencer {
         self.execute(repo)
     }
 
-    /// Abort the operation, restoring the original state.
+    /// Abort the operation, restoring HEAD and index to the original state.
     pub fn abort(&self, repo: &mut Repository) -> Result<(), MergeError> {
-        // TODO: Reset HEAD to original_head.
-        // For now, just clean up the sequencer state.
-        let _ = (repo, self.original_head);
+        // Check if sequencer state actually exists
+        let seq_dir = self.git_dir.join("sequencer");
+        if !seq_dir.exists() {
+            return Err(MergeError::InvalidPatch(
+                "no cherry-pick or revert in progress".into(),
+            ));
+        }
+
+        // 1. Read the original_head commit to get its tree
+        let obj = repo
+            .odb()
+            .read(&self.original_head)?
+            .ok_or(MergeError::ObjectNotFound(self.original_head))?;
+        let tree_oid = match obj {
+            Object::Commit(c) => c.tree,
+            _ => {
+                return Err(MergeError::UnexpectedObjectType {
+                    oid: self.original_head,
+                    expected: "commit",
+                    actual: obj.object_type().to_string(),
+                })
+            }
+        };
+
+        // 2. Update HEAD ref to original_head
+        let head_ref =
+            git_ref::RefName::new(bstr::BString::from("HEAD")).map_err(|e| {
+                MergeError::InvalidPatch(format!("invalid ref name: {}", e))
+            })?;
+        let resolved = repo.refs().resolve(&head_ref).map_err(|e| {
+            MergeError::InvalidPatch(format!("failed to resolve HEAD: {}", e))
+        })?;
+        match resolved {
+            Some(git_ref::Reference::Symbolic { target, .. }) => {
+                repo.refs().write_ref(&target, &self.original_head).map_err(|e| {
+                    MergeError::InvalidPatch(format!("failed to update ref: {}", e))
+                })?;
+            }
+            _ => {
+                repo.refs().write_ref(&head_ref, &self.original_head).map_err(|e| {
+                    MergeError::InvalidPatch(format!("failed to update HEAD: {}", e))
+                })?;
+            }
+        }
+
+        // 3. Restore the index from original_head's tree (read-tree)
+        let mut new_index = git_index::Index::new();
+        Self::build_index_from_tree(repo.odb(), &tree_oid, &bstr::BString::from(""), &mut new_index)?;
+        repo.set_index(new_index);
+        repo.write_index().map_err(|e| {
+            MergeError::InvalidPatch(format!("failed to write index: {}", e))
+        })?;
+
+        // 4. Cleanup sequencer state
         self.cleanup()?;
+
+        Ok(())
+    }
+
+    /// Recursively build an index from a tree object.
+    fn build_index_from_tree(
+        odb: &git_odb::ObjectDatabase,
+        tree_oid: &ObjectId,
+        prefix: &bstr::BString,
+        index: &mut git_index::Index,
+    ) -> Result<(), MergeError> {
+        let obj = odb
+            .read(tree_oid)?
+            .ok_or(MergeError::ObjectNotFound(*tree_oid))?;
+        let tree = match obj {
+            Object::Tree(t) => t,
+            _ => {
+                return Err(MergeError::UnexpectedObjectType {
+                    oid: *tree_oid,
+                    expected: "tree",
+                    actual: obj.object_type().to_string(),
+                })
+            }
+        };
+
+        for entry in &tree.entries {
+            let path = if prefix.is_empty() {
+                entry.name.clone()
+            } else {
+                let mut p = prefix.clone();
+                p.push(b'/');
+                p.extend_from_slice(&entry.name);
+                p
+            };
+
+            if entry.mode.is_tree() {
+                Self::build_index_from_tree(odb, &entry.oid, &path, index)?;
+            } else {
+                index.add(git_index::IndexEntry {
+                    path,
+                    oid: entry.oid,
+                    mode: entry.mode,
+                    stage: git_index::Stage::Normal,
+                    stat: git_index::StatData::default(),
+                    flags: git_index::EntryFlags::default(),
+                });
+            }
+        }
         Ok(())
     }
 
@@ -225,11 +389,16 @@ impl Sequencer {
             let action_str = match &entry.action {
                 SequencerAction::Pick => "pick",
                 SequencerAction::Revert => "revert",
+                SequencerAction::Reword => "reword",
                 SequencerAction::Edit => "edit",
                 SequencerAction::Squash => "squash",
                 SequencerAction::Fixup => "fixup",
+                SequencerAction::Drop => "drop",
                 SequencerAction::Exec(_) => "exec",
                 SequencerAction::Break => "break",
+                SequencerAction::Label(_) => "label",
+                SequencerAction::Reset(_) => "reset",
+                SequencerAction::Merge => "merge",
             };
             todo_content.push_str(&format!(
                 "{} {} {}\n",
@@ -287,13 +456,18 @@ impl Sequencer {
 
             let is_done = parts[0] == "done";
             let action = match parts[1] {
-                "pick" => SequencerAction::Pick,
+                "pick" | "p" => SequencerAction::Pick,
                 "revert" => SequencerAction::Revert,
-                "edit" => SequencerAction::Edit,
-                "squash" => SequencerAction::Squash,
-                "fixup" => SequencerAction::Fixup,
-                "exec" => SequencerAction::Exec(parts[2].to_string()),
-                "break" => SequencerAction::Break,
+                "reword" | "r" => SequencerAction::Reword,
+                "edit" | "e" => SequencerAction::Edit,
+                "squash" | "s" => SequencerAction::Squash,
+                "fixup" | "f" => SequencerAction::Fixup,
+                "drop" | "d" => SequencerAction::Drop,
+                "exec" | "x" => SequencerAction::Exec(parts[2].to_string()),
+                "break" | "b" => SequencerAction::Break,
+                "label" | "l" => SequencerAction::Label(parts[2].to_string()),
+                "reset" | "t" => SequencerAction::Reset(parts[2].to_string()),
+                "merge" | "m" => SequencerAction::Merge,
                 _ => continue,
             };
 

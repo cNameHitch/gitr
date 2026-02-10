@@ -13,6 +13,7 @@ Auto-generated from all feature plans. Last updated: 2026-02-07
 - Git on-disk format (loose objects, packfiles, refs, index, config, reflog) — all file-based (025-git-parity-phase2)
 - Rust 1.75+ (Cargo workspace, currently 16 crates → 17 after this phase) + `clap` 4 (CLI), `bstr` 1 (byte strings), `sha1`/`sha2` 0.10 (hashing), `flate2` 1 (zlib), `memmap2` 0.9 (packfile), `crc32fast` 1 (pack index), `thiserror` 2 / `anyhow` 1 (errors), `rayon` 1 (parallelism), `regex` 1 (grep/pickaxe), `tempfile` 3 (test isolation) (026-git-parity-phase3)
 - Git on-disk format (loose objects, packfiles v2, refs, index, config, reflog, attributes, mailmap) — all file-based (026-git-parity-phase3)
+- Rust 1.75+ (Cargo workspace, 19 crates) + clap 4 (CLI), bstr 1 (byte strings), sha1/sha2 0.10 (hashing), flate2 1 (zlib), memmap2 0.9 (packfile), crc32fast 1 (pack index), thiserror 2 / anyhow 1 (errors), rayon 1 (parallelism), regex 1 (grep/pickaxe), tempfile 3 (test isolation) (027-git-parity-phase4)
 
 - Rust 1.75+ + `tempfile` (test isolation), `std::process::Command` (subprocess execution) (019-e2e-interop-tests)
 
@@ -32,9 +33,9 @@ cargo test [ONLY COMMANDS FOR ACTIVE TECHNOLOGIES][ONLY COMMANDS FOR ACTIVE TECH
 Rust 1.75+: Follow standard conventions
 
 ## Recent Changes
+- 027-git-parity-phase4: Added Rust 1.75+ (Cargo workspace, 19 crates) + clap 4 (CLI), bstr 1 (byte strings), sha1/sha2 0.10 (hashing), flate2 1 (zlib), memmap2 0.9 (packfile), crc32fast 1 (pack index), thiserror 2 / anyhow 1 (errors), rayon 1 (parallelism), regex 1 (grep/pickaxe), tempfile 3 (test isolation)
 - 026-git-parity-phase3: Added Rust 1.75+ (Cargo workspace, currently 16 crates → 17 after this phase) + `clap` 4 (CLI), `bstr` 1 (byte strings), `sha1`/`sha2` 0.10 (hashing), `flate2` 1 (zlib), `memmap2` 0.9 (packfile), `crc32fast` 1 (pack index), `thiserror` 2 / `anyhow` 1 (errors), `rayon` 1 (parallelism), `regex` 1 (grep/pickaxe), `tempfile` 3 (test isolation)
 - 025-git-parity-phase2: Added Rust 1.75+ (Cargo workspace, 16 crates) + clap 4 (CLI), bstr 1 (byte strings), chrono (date formatting via git-utils), thiserror 2 / anyhow 1 (errors), git-diff (diffstat), git-revwalk (format/graph), git-ref (reflog)
-- 024-git-parity-polish: 42 behavioral parity fixes across `git-cli`, `git-revwalk`, `git-utils`, `git-config`, `git-repository` — pathspec disambiguation, format string completeness, exit code mapping, date padding, system config cascade, macOS init defaults
 
 
 <!-- MANUAL ADDITIONS START -->
