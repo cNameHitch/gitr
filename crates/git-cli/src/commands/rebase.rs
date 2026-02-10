@@ -18,78 +18,78 @@ use super::open_repo;
 pub struct RebaseArgs {
     /// Rebase onto a different base
     #[arg(long)]
-    onto: Option<String>,
+    pub(crate) onto: Option<String>,
 
     /// Abort the current rebase
     #[arg(long)]
-    abort: bool,
+    pub(crate) abort: bool,
 
     /// Continue the rebase after resolving conflicts
     #[arg(long)]
-    r#continue: bool,
+    pub(crate) r#continue: bool,
 
     /// Skip the current patch
     #[arg(long)]
-    skip: bool,
+    pub(crate) skip: bool,
 
     /// Interactive rebase (stub for Phase 8)
     #[arg(short, long)]
-    interactive: bool,
+    pub(crate) interactive: bool,
 
     /// Be quiet
     #[arg(short, long)]
-    quiet: bool,
+    pub(crate) quiet: bool,
 
     /// Be verbose
     #[arg(short, long)]
-    verbose: bool,
+    pub(crate) verbose: bool,
 
     /// Add Signed-off-by trailer to commits
     #[arg(long)]
-    signoff: bool,
+    pub(crate) signoff: bool,
 
     /// Force rebase even if current branch is up to date
     #[arg(short = 'f', long)]
-    force_rebase: bool,
+    pub(crate) force_rebase: bool,
 
     /// Automatically squash fixup commits
     #[arg(long)]
-    autosquash: bool,
+    pub(crate) autosquash: bool,
 
     /// Do not automatically squash fixup commits
     #[arg(long)]
-    no_autosquash: bool,
+    pub(crate) no_autosquash: bool,
 
     /// Automatically stash/unstash before and after
     #[arg(long)]
-    autostash: bool,
+    pub(crate) autostash: bool,
 
     /// Do not automatically stash/unstash
     #[arg(long)]
-    no_autostash: bool,
+    pub(crate) no_autostash: bool,
 
     /// Automatically update refs that point to rebased commits
     #[arg(long)]
-    update_refs: bool,
+    pub(crate) update_refs: bool,
 
     /// Execute a shell command after each commit
     #[arg(short = 'x', long)]
-    exec: Option<String>,
+    pub(crate) exec: Option<String>,
 
     /// Rebase all reachable commits from root
     #[arg(long)]
-    root: bool,
+    pub(crate) root: bool,
 
     /// Merge strategy to use
     #[arg(short = 's', long = "strategy")]
-    strategy: Option<String>,
+    pub(crate) strategy: Option<String>,
 
     /// Pass option to the merge strategy
     #[arg(short = 'X', long = "strategy-option")]
-    strategy_option: Vec<String>,
+    pub(crate) strategy_option: Vec<String>,
 
     /// Upstream branch
-    upstream: Option<String>,
+    pub(crate) upstream: Option<String>,
 }
 
 pub fn run(args: &RebaseArgs, cli: &Cli) -> Result<i32> {

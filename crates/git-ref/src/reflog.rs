@@ -220,6 +220,102 @@ pub fn resolve_at_date(
     Ok(result)
 }
 
+/// Expire old reflog entries for a ref.
+/// Removes entries whose timestamp is older than `expire_time`.
+/// Always keeps the most recent (tip) entry.
+pub fn expire_reflog(
+    git_dir: &Path,
+    name: &RefName,
+    expire_timestamp: i64,
+) -> Result<usize, RefError> {
+    let path = reflog_path(git_dir, name);
+    if !path.exists() {
+        return Ok(0);
+    }
+
+    let contents = fs::read(&path).map_err(|e| RefError::IoPath {
+        path: path.clone(),
+        source: e,
+    })?;
+
+    let mut kept = Vec::new();
+    let mut removed = 0usize;
+    let lines: Vec<&[u8]> = contents.split(|&b| b == b'\n').filter(|l| !l.is_empty()).collect();
+    let total = lines.len();
+
+    for (i, line) in lines.iter().enumerate() {
+        let entry = ReflogEntry::parse(line.as_bstr())?;
+        // Always keep the most recent entry (last line in file = newest)
+        let is_last = i == total - 1;
+        if is_last || entry.identity.date.timestamp >= expire_timestamp {
+            kept.push(entry);
+        } else {
+            removed += 1;
+        }
+    }
+
+    // Rewrite file with kept entries
+    let mut output = Vec::new();
+    for entry in &kept {
+        output.extend_from_slice(&entry.to_bytes());
+        output.push(b'\n');
+    }
+
+    fs::write(&path, &output).map_err(|e| RefError::IoPath {
+        path: path.clone(),
+        source: e,
+    })?;
+
+    Ok(removed)
+}
+
+/// Delete a specific reflog entry by index (0 = most recent).
+pub fn delete_reflog_entry(
+    git_dir: &Path,
+    name: &RefName,
+    index: usize,
+) -> Result<(), RefError> {
+    let path = reflog_path(git_dir, name);
+    if !path.exists() {
+        return Err(RefError::NotFound(name.as_str().to_string()));
+    }
+
+    let contents = fs::read(&path).map_err(|e| RefError::IoPath {
+        path: path.clone(),
+        source: e,
+    })?;
+
+    // Parse all entries (file order = oldest first)
+    let mut entries: Vec<ReflogEntry> = Vec::new();
+    for line in contents.split(|&b| b == b'\n').filter(|l| !l.is_empty()) {
+        entries.push(ReflogEntry::parse(line.as_bstr())?);
+    }
+
+    if entries.is_empty() {
+        return Err(RefError::NotFound(format!("{}@{{{}}}", name.as_str(), index)));
+    }
+
+    // Index 0 = most recent = last in file
+    let file_index = entries.len().checked_sub(1 + index)
+        .ok_or_else(|| RefError::NotFound(format!("{}@{{{}}}", name.as_str(), index)))?;
+
+    entries.remove(file_index);
+
+    // Rewrite
+    let mut output = Vec::new();
+    for entry in &entries {
+        output.extend_from_slice(&entry.to_bytes());
+        output.push(b'\n');
+    }
+
+    fs::write(&path, &output).map_err(|e| RefError::IoPath {
+        path: path.clone(),
+        source: e,
+    })?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

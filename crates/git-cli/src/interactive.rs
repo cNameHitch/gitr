@@ -5,8 +5,9 @@
 //! Input is read from `/dev/tty` so the selector works even when stdin is piped.
 
 use std::io::{self, BufRead, BufReader, Write};
+use std::process::Command;
 
-use bstr::ByteSlice;
+use bstr::{BString, ByteSlice};
 use git_diff::{DiffLine, DiffResult, FileDiff, Hunk};
 
 /// Decision for a single hunk.
@@ -153,9 +154,23 @@ impl InteractiveHunkSelector {
                             continue;
                         }
                         "e" => {
-                            // Edit hunk: for now, accept as-is with a note
-                            writeln!(err, "Sorry, manual hunk editing is not yet supported")?;
-                            continue;
+                            match edit_hunk(&hunks[i]) {
+                                Ok(Some(edited)) => {
+                                    hunks[i] = edited;
+                                    decisions.push(HunkDecision::Accept);
+                                    i += 1;
+                                    break;
+                                }
+                                Ok(None) => {
+                                    // User removed all lines or aborted
+                                    writeln!(err, "Edit was aborted.")?;
+                                    continue;
+                                }
+                                Err(e) => {
+                                    writeln!(err, "Your edited hunk does not apply. {}", e)?;
+                                    continue;
+                                }
+                            }
                         }
                         _ => {
                             print_help(&mut err, can_split)?;
@@ -439,6 +454,312 @@ pub fn split_hunk(hunk: &Hunk) -> Vec<Hunk> {
     sub_hunks
 }
 
+/// Resolve which editor to use for manual hunk editing.
+///
+/// Checks (in order): `$GIT_EDITOR`, `$VISUAL`, `$EDITOR`, then falls back to `vi`.
+fn resolve_editor() -> String {
+    if let Ok(e) = std::env::var("GIT_EDITOR") {
+        if !e.is_empty() {
+            return e;
+        }
+    }
+    if let Ok(e) = std::env::var("VISUAL") {
+        if !e.is_empty() {
+            return e;
+        }
+    }
+    if let Ok(e) = std::env::var("EDITOR") {
+        if !e.is_empty() {
+            return e;
+        }
+    }
+    "vi".to_string()
+}
+
+/// Format a hunk into the editable text shown to the user in their editor.
+///
+/// The format matches git's manual hunk edit mode with instructional comments.
+fn format_hunk_for_edit(hunk: &Hunk) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(
+        b"# Manual hunk edit mode -- see bottom for a quick guide.\n",
+    );
+
+    // @@ header
+    let old_range = if hunk.old_count == 1 {
+        format!("{}", hunk.old_start)
+    } else {
+        format!("{},{}", hunk.old_start, hunk.old_count)
+    };
+    let new_range = if hunk.new_count == 1 {
+        format!("{}", hunk.new_start)
+    } else {
+        format!("{},{}", hunk.new_start, hunk.new_count)
+    };
+    let header_suffix = match &hunk.header {
+        Some(h) => format!(" {}", h.to_str_lossy()),
+        None => String::new(),
+    };
+    buf.extend_from_slice(
+        format!("@@ -{} +{} @@{}\n", old_range, new_range, header_suffix).as_bytes(),
+    );
+
+    // Diff lines
+    for line in &hunk.lines {
+        match line {
+            DiffLine::Context(content) => {
+                buf.push(b' ');
+                buf.extend_from_slice(content);
+                if !content.ends_with(b"\n") {
+                    buf.push(b'\n');
+                }
+            }
+            DiffLine::Deletion(content) => {
+                buf.push(b'-');
+                buf.extend_from_slice(content);
+                if !content.ends_with(b"\n") {
+                    buf.push(b'\n');
+                }
+            }
+            DiffLine::Addition(content) => {
+                buf.push(b'+');
+                buf.extend_from_slice(content);
+                if !content.ends_with(b"\n") {
+                    buf.push(b'\n');
+                }
+            }
+        }
+    }
+
+    // Instructions
+    buf.extend_from_slice(b"# ---\n");
+    buf.extend_from_slice(b"# To remove '-' lines, make them ' ' lines (context).\n");
+    buf.extend_from_slice(b"# To remove '+' lines, delete them.\n");
+    buf.extend_from_slice(b"# Lines starting with # will be removed.\n");
+    buf.extend_from_slice(
+        b"# If the patch applies cleanly, the edited hunk will be used.\n",
+    );
+    buf.extend_from_slice(
+        b"# If it does not apply cleanly, you will be given an opportunity to\n",
+    );
+    buf.extend_from_slice(
+        b"# edit again.  If all lines of the hunk are removed, then the edit is\n",
+    );
+    buf.extend_from_slice(b"# aborted and the hunk is left unchanged.\n");
+
+    buf
+}
+
+/// Parse the user-edited temp file back into a `Hunk`.
+///
+/// Returns `Ok(Some(hunk))` on success, `Ok(None)` if the edit was aborted
+/// (all non-comment lines removed), or `Err` if the edited hunk is malformed.
+fn parse_edited_hunk(data: &[u8], original: &Hunk) -> Result<Option<Hunk>, String> {
+    let text = data.to_str().map_err(|_| "edited hunk contains invalid UTF-8".to_string())?;
+
+    // Filter out comment lines
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .collect();
+
+    if lines.is_empty() {
+        return Ok(None);
+    }
+
+    // First non-comment line should be the @@ header
+    let first = lines[0];
+    if !first.starts_with("@@") {
+        return Err("expected @@ header as first non-comment line".to_string());
+    }
+
+    // Parse the @@ header to get old_start (we'll recompute counts from lines)
+    let (old_start, _old_count_header, new_start, _new_count_header, header) =
+        parse_at_at_header(first)?;
+
+    // Parse the diff body lines
+    let body = &lines[1..];
+
+    // Check if all body lines were removed (abort)
+    if body.is_empty() {
+        return Ok(None);
+    }
+
+    let mut diff_lines: Vec<DiffLine> = Vec::new();
+    let mut actual_old_count: u32 = 0;
+    let mut actual_new_count: u32 = 0;
+
+    for &line in body {
+        if line.is_empty() {
+            // Treat empty lines as context lines with just a newline
+            diff_lines.push(DiffLine::Context(BString::from("\n")));
+            actual_old_count += 1;
+            actual_new_count += 1;
+        } else {
+            let prefix = line.as_bytes()[0];
+            let rest = &line[1..];
+            // Ensure content ends with newline
+            let content = if rest.ends_with('\n') {
+                BString::from(rest)
+            } else {
+                BString::from(format!("{}\n", rest))
+            };
+
+            match prefix {
+                b' ' => {
+                    diff_lines.push(DiffLine::Context(content));
+                    actual_old_count += 1;
+                    actual_new_count += 1;
+                }
+                b'-' => {
+                    diff_lines.push(DiffLine::Deletion(content));
+                    actual_old_count += 1;
+                }
+                b'+' => {
+                    diff_lines.push(DiffLine::Addition(content));
+                    actual_new_count += 1;
+                }
+                _ => {
+                    return Err(format!(
+                        "invalid line prefix '{}' — lines must start with ' ', '-', '+', or '#'",
+                        line.chars().next().unwrap_or('?')
+                    ));
+                }
+            }
+        }
+    }
+
+    // If no diff lines remain, abort
+    if diff_lines.is_empty() {
+        return Ok(None);
+    }
+
+    // Use the parsed header or fall back to the original header
+    let hunk_header = header
+        .map(|h| BString::from(h.to_string()))
+        .or_else(|| original.header.clone());
+
+    Ok(Some(Hunk {
+        old_start,
+        old_count: actual_old_count,
+        new_start,
+        new_count: actual_new_count,
+        header: hunk_header,
+        lines: diff_lines,
+    }))
+}
+
+/// Parse an `@@ -OLD_START[,OLD_COUNT] +NEW_START[,NEW_COUNT] @@[ HEADER]` line.
+fn parse_at_at_header(line: &str) -> Result<(u32, u32, u32, u32, Option<&str>), String> {
+    // Expected format: @@ -A[,B] +C[,D] @@[ rest]
+    let s = line
+        .strip_prefix("@@ ")
+        .ok_or_else(|| "missing '@@ ' prefix".to_string())?;
+
+    // Find the closing @@
+    let end_marker = s
+        .find(" @@")
+        .ok_or_else(|| "missing closing ' @@'".to_string())?;
+    let range_part = &s[..end_marker];
+    let after_at = &s[end_marker + 3..]; // skip " @@"
+    let header = if after_at.is_empty() {
+        None
+    } else {
+        Some(after_at.trim_start())
+    };
+
+    // range_part should be like "-A,B +C,D" or "-A +C"
+    let parts: Vec<&str> = range_part.split_whitespace().collect();
+    if parts.len() != 2 {
+        return Err(format!("expected two range specs, got {}", parts.len()));
+    }
+
+    let (old_start, old_count) = parse_range(parts[0], '-')?;
+    let (new_start, new_count) = parse_range(parts[1], '+')?;
+
+    Ok((old_start, old_count, new_start, new_count, header))
+}
+
+/// Parse a range like `-A,B` or `+C,D` or `-A` or `+C`.
+fn parse_range(s: &str, prefix: char) -> Result<(u32, u32), String> {
+    let inner = s
+        .strip_prefix(prefix)
+        .ok_or_else(|| format!("expected '{}' prefix in range '{}'", prefix, s))?;
+
+    if let Some((start_s, count_s)) = inner.split_once(',') {
+        let start = start_s
+            .parse::<u32>()
+            .map_err(|e| format!("bad range start '{}': {}", start_s, e))?;
+        let count = count_s
+            .parse::<u32>()
+            .map_err(|e| format!("bad range count '{}': {}", count_s, e))?;
+        Ok((start, count))
+    } else {
+        let start = inner
+            .parse::<u32>()
+            .map_err(|e| format!("bad range '{}': {}", inner, e))?;
+        Ok((start, 1))
+    }
+}
+
+/// Perform the interactive manual hunk edit.
+///
+/// Writes the hunk to a temp file, opens the user's editor, reads back the
+/// result, and parses it into a new `Hunk`.
+///
+/// Returns `Ok(Some(hunk))` on success, `Ok(None)` if aborted, or `Err` on
+/// parse/validation failure.
+fn edit_hunk(hunk: &Hunk) -> Result<Option<Hunk>, String> {
+    use std::io::Read as _;
+
+    let content = format_hunk_for_edit(hunk);
+
+    // Write to a temp file
+    let mut tmp = tempfile::Builder::new()
+        .prefix("gitr-hunk-edit-")
+        .suffix(".diff")
+        .tempfile()
+        .map_err(|e| format!("failed to create temp file: {}", e))?;
+
+    tmp.write_all(&content)
+        .map_err(|e| format!("failed to write temp file: {}", e))?;
+    tmp.flush()
+        .map_err(|e| format!("failed to flush temp file: {}", e))?;
+
+    let path = tmp.path().to_path_buf();
+    let editor = resolve_editor();
+
+    // Launch editor — use shell so that editor strings like "code --wait" work
+    let status = if cfg!(target_os = "windows") {
+        Command::new("cmd")
+            .args(["/C", &format!("{} {}", editor, path.display())])
+            .status()
+    } else {
+        Command::new("sh")
+            .args(["-c", &format!("{} \"{}\"", editor, path.display())])
+            .status()
+    };
+
+    match status {
+        Ok(s) if s.success() => {}
+        Ok(s) => {
+            return Err(format!("editor exited with status {}", s));
+        }
+        Err(e) => {
+            return Err(format!("failed to launch editor '{}': {}", editor, e));
+        }
+    }
+
+    // Read back the edited file
+    let mut edited = Vec::new();
+    let mut file = std::fs::File::open(&path)
+        .map_err(|e| format!("failed to read edited file: {}", e))?;
+    file.read_to_end(&mut edited)
+        .map_err(|e| format!("failed to read edited file: {}", e))?;
+
+    parse_edited_hunk(&edited, hunk)
+}
+
 /// Print the help message for patch mode.
 fn print_help(out: &mut impl Write, can_split: bool) -> io::Result<()> {
     writeln!(out, "y - stage this hunk")?;
@@ -449,7 +770,7 @@ fn print_help(out: &mut impl Write, can_split: bool) -> io::Result<()> {
     if can_split {
         writeln!(out, "s - split the current hunk into smaller hunks")?;
     }
-    writeln!(out, "e - manually edit the current hunk (not yet supported)")?;
+    writeln!(out, "e - manually edit the current hunk")?;
     writeln!(out, "? - print help")?;
     Ok(())
 }

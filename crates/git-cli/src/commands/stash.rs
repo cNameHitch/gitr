@@ -12,6 +12,7 @@ use git_ref::reflog::{ReflogEntry, append_reflog_entry, read_reflog};
 use git_utils::date::{GitDate, Signature};
 
 use crate::Cli;
+use crate::interactive::{InteractiveHunkSelector, apply_hunks_to_content, reverse_apply_hunks_to_content};
 use super::open_repo;
 
 #[derive(Args)]
@@ -89,12 +90,15 @@ pub enum StashSubcommand {
 pub fn run(args: &StashArgs, cli: &Cli) -> Result<i32> {
     match &args.command {
         None | Some(StashSubcommand::Push { .. }) => {
-            let (message, include_untracked) = match &args.command {
-                Some(StashSubcommand::Push { message, include_untracked, .. }) => {
-                    (message.clone(), *include_untracked)
+            let (message, include_untracked, patch) = match &args.command {
+                Some(StashSubcommand::Push { message, include_untracked, patch, .. }) => {
+                    (message.clone(), *include_untracked, *patch)
                 }
-                _ => (None, false),
+                _ => (None, false, false),
             };
+            if patch {
+                return stash_push_patch(cli, message.as_deref());
+            }
             stash_push(cli, message.as_deref(), include_untracked)
         }
         Some(StashSubcommand::Pop { stash }) => stash_pop(cli, stash.unwrap_or(0), true),
@@ -238,6 +242,164 @@ fn stash_push(cli: &Cli, message: Option<&str>, include_untracked: bool) -> Resu
     // Remove untracked files if --include-untracked
     if include_untracked {
         remove_untracked_files(&current_index, &work_tree)?;
+    }
+
+    writeln!(err, "Saved working directory and index state {}", stash_msg)?;
+    Ok(0)
+}
+
+/// Interactive patch-mode stash: select hunks to stash, create stash entry, reverse-apply from worktree.
+fn stash_push_patch(cli: &Cli, message: Option<&str>) -> Result<i32> {
+    let mut repo = open_repo(cli)?;
+    let stderr = io::stderr();
+    let mut err = stderr.lock();
+
+    let head_oid = repo.head_oid()?
+        .ok_or_else(|| anyhow::anyhow!("cannot stash on an unborn branch"))?;
+
+    let branch = repo.current_branch()?.unwrap_or_else(|| "(no branch)".to_string());
+
+    let head_obj = repo.odb().read(&head_oid)?
+        .ok_or_else(|| anyhow::anyhow!("HEAD commit not found"))?;
+    let head_commit = match &head_obj {
+        Object::Commit(c) => c,
+        _ => bail!("HEAD is not a commit"),
+    };
+    let head_summary = head_commit.summary().to_str_lossy().to_string();
+    let _head_tree = head_commit.tree;
+
+    let work_tree = repo.work_tree()
+        .ok_or_else(|| anyhow::anyhow!("not a working tree"))?
+        .to_path_buf();
+
+    // Diff index vs worktree
+    let diff_result = git_diff::worktree::diff_index_to_worktree(&mut repo, &git_diff::DiffOptions::default())?;
+    if diff_result.files.is_empty() {
+        eprintln!("No local changes to save");
+        return Ok(0);
+    }
+
+    let mut selector = InteractiveHunkSelector::new()?;
+    let selected = selector.select_hunks(&diff_result)?;
+    if selected.files.is_empty() {
+        eprintln!("No changes selected");
+        return Ok(0);
+    }
+
+    // Build a stash tree: start from current index, apply selected hunks to get stash content
+    let index_path = repo.git_dir().join("index");
+    let current_index = Index::read_from(&index_path)?;
+    let mut stash_index = Index::new();
+
+    // Copy all index entries to stash_index
+    for entry in current_index.iter() {
+        if entry.stage != Stage::Normal {
+            continue;
+        }
+        stash_index.add(IndexEntry {
+            path: entry.path.clone(),
+            oid: entry.oid,
+            mode: entry.mode,
+            stage: Stage::Normal,
+            stat: entry.stat,
+            flags: EntryFlags::default(),
+        });
+    }
+
+    // For selected files, apply hunks to index content to get stash content
+    for file_diff in &selected.files {
+        let path = file_diff.path();
+        let index_oid = {
+            let index = repo.index()?;
+            index.get(path.as_ref(), Stage::Normal).map(|e| e.oid)
+        };
+        let old_content = if let Some(oid) = index_oid {
+            match repo.odb().read(&oid)? {
+                Some(Object::Blob(b)) => b.data.to_vec(),
+                _ => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+        let patched = apply_hunks_to_content(&old_content, &file_diff.hunks);
+        let blob = git_object::Blob { data: patched };
+        let blob_oid = repo.odb().write(&Object::Blob(blob))?;
+        let mode = file_diff.new_mode.unwrap_or(FileMode::Regular);
+        stash_index.add(IndexEntry {
+            path: path.clone(),
+            oid: blob_oid,
+            mode,
+            stage: Stage::Normal,
+            stat: StatData::default(),
+            flags: EntryFlags::default(),
+        });
+    }
+
+    let stash_tree_oid = stash_index.write_tree(repo.odb())?;
+
+    let sig = build_stash_signature(&repo)?;
+
+    // Create index commit
+    let index_tree_oid = current_index.write_tree(repo.odb())?;
+    let index_commit = Commit {
+        tree: index_tree_oid,
+        parents: vec![head_oid],
+        author: sig.clone(),
+        committer: sig.clone(),
+        message: BString::from(
+            "index on ".to_string() + &branch + ": " + &head_oid.to_hex()[..7] + " " + &head_summary + "\n",
+        ),
+        encoding: None,
+        gpgsig: None,
+        extra_headers: Vec::new(),
+    };
+    let index_commit_oid = repo.odb().write(&Object::Commit(index_commit))?;
+
+    let default_msg = format!("WIP on {}: {} {}", branch, &head_oid.to_hex()[..7], head_summary);
+    let custom_msg;
+    let stash_msg: &str = match message {
+        Some(m) => {
+            custom_msg = format!("On {}: {}", branch, m);
+            &custom_msg
+        }
+        None => &default_msg,
+    };
+
+    let stash_commit = Commit {
+        tree: stash_tree_oid,
+        parents: vec![head_oid, index_commit_oid],
+        author: sig.clone(),
+        committer: sig.clone(),
+        message: BString::from(format!("{}\n", stash_msg)),
+        encoding: None,
+        gpgsig: None,
+        extra_headers: Vec::new(),
+    };
+    let stash_oid = repo.odb().write(&Object::Commit(stash_commit))?;
+
+    // Update refs/stash
+    let stash_ref = RefName::new(BString::from("refs/stash"))?;
+    let old_stash_oid = repo.refs().resolve_to_oid(&stash_ref)?
+        .unwrap_or(git_hash::HashAlgorithm::Sha1.null_oid());
+    repo.refs().write_ref(&stash_ref, &stash_oid)?;
+
+    let reflog_entry = ReflogEntry {
+        old_oid: old_stash_oid,
+        new_oid: stash_oid,
+        identity: sig,
+        message: BString::from(stash_msg),
+    };
+    append_reflog_entry(repo.git_dir(), &stash_ref, &reflog_entry)?;
+
+    // Reverse-apply selected hunks from worktree to remove stashed changes
+    for file_diff in &selected.files {
+        let path = file_diff.path();
+        let fs_path = work_tree.join(path.to_str_lossy().as_ref());
+        if fs_path.exists() {
+            let worktree_content = std::fs::read(&fs_path)?;
+            let reverted = reverse_apply_hunks_to_content(&worktree_content, &file_diff.hunks);
+            std::fs::write(&fs_path, &reverted)?;
+        }
     }
 
     writeln!(err, "Saved working directory and index state {}", stash_msg)?;

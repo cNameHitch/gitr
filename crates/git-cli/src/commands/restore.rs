@@ -1,13 +1,15 @@
 use std::path::PathBuf;
 
 use anyhow::{bail, Result};
-use bstr::BString;
+use bstr::{BString, ByteSlice};
 use clap::Args;
 use git_hash::ObjectId;
 use git_index::{EntryFlags, IndexEntry, Stage, StatData};
 use git_object::{FileMode, Object};
 
 use crate::Cli;
+use crate::interactive::{InteractiveHunkSelector, reverse_apply_hunks_to_content};
+use git_diff::{DiffOptions, worktree::{diff_index_to_worktree, diff_head_to_index}};
 use super::open_repo;
 
 #[derive(Args)]
@@ -82,6 +84,64 @@ pub fn run(args: &RestoreArgs, cli: &Cli) -> Result<i32> {
         .work_tree()
         .ok_or_else(|| anyhow::anyhow!("this operation must be run in a work tree"))?
         .to_path_buf();
+
+    if args.patch {
+        // For --staged, diff HEAD vs index; otherwise diff index vs worktree
+        let diff_result = if args.staged {
+            diff_head_to_index(&mut repo, &DiffOptions::default())?
+        } else {
+            diff_index_to_worktree(&mut repo, &DiffOptions::default())?
+        };
+        if diff_result.files.is_empty() {
+            eprintln!("No changes.");
+            return Ok(0);
+        }
+        let mut selector = InteractiveHunkSelector::new()?;
+        let selected = selector.select_hunks(&diff_result)?;
+        if args.staged {
+            // Reverse-apply selected hunks from index to unstage them
+            for file_diff in &selected.files {
+                let path = file_diff.path();
+                let index_oid = {
+                    let index = repo.index()?;
+                    index.get(path.as_ref(), Stage::Normal).map(|e| e.oid)
+                };
+                let index_content = if let Some(oid) = index_oid {
+                    match repo.odb().read(&oid)? {
+                        Some(Object::Blob(b)) => b.data.to_vec(),
+                        _ => Vec::new(),
+                    }
+                } else {
+                    Vec::new()
+                };
+                let reverted = reverse_apply_hunks_to_content(&index_content, &file_diff.hunks);
+                let blob = git_object::Blob { data: reverted };
+                let new_oid = repo.odb().write(&Object::Blob(blob))?;
+                let mode = file_diff.old_mode.unwrap_or(FileMode::Regular);
+                let entry = IndexEntry {
+                    path: path.clone(),
+                    oid: new_oid,
+                    mode,
+                    stage: Stage::Normal,
+                    stat: StatData::default(),
+                    flags: EntryFlags::default(),
+                };
+                let index = repo.index_mut()?;
+                index.add(entry);
+            }
+            repo.write_index()?;
+        } else {
+            // Reverse-apply selected hunks from worktree files
+            for file_diff in &selected.files {
+                let path = file_diff.path();
+                let fs_path = work_tree.join(path.to_str_lossy().as_ref());
+                let worktree_content = std::fs::read(&fs_path)?;
+                let reverted = reverse_apply_hunks_to_content(&worktree_content, &file_diff.hunks);
+                std::fs::write(&fs_path, &reverted)?;
+            }
+        }
+        return Ok(0);
+    }
 
     // Determine what to restore: if --staged, restore from source to index.
     // If --worktree (or neither flag), restore from index to worktree.

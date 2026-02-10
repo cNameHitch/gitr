@@ -18,6 +18,8 @@ pub struct CherryEntry {
     /// '+' means not upstream, '-' means equivalent exists upstream
     pub marker: char,
     pub subject: String,
+    /// The computed patch-id for this commit.
+    pub patch_id: Option<String>,
 }
 
 /// Find commits in `head` that are not in `upstream` by comparing patch IDs.
@@ -57,10 +59,77 @@ pub fn cherry(
             oid: *oid,
             marker,
             subject,
+            patch_id: Some(patch_id),
         });
     }
 
     Ok(entries)
+}
+
+/// Compute symmetric diff with cherry equivalence marking.
+///
+/// Returns two vectors: (left_commits, right_commits), each with cherry markers.
+/// Left = reachable from A but not B, Right = reachable from B but not A.
+pub fn symmetric_diff_with_cherry(
+    repo: &Repository,
+    left: &ObjectId,
+    right: &ObjectId,
+) -> Result<(Vec<CherryEntry>, Vec<CherryEntry>), RevWalkError> {
+    // Get left-side commits (reachable from left but not right)
+    let left_commits = collect_commits(repo, left, right)?;
+    // Get right-side commits (reachable from right but not left)
+    let right_commits = collect_commits(repo, right, left)?;
+
+    // Compute patch IDs for both sides
+    let left_patch_ids: HashSet<String> = left_commits
+        .iter()
+        .filter_map(|oid| compute_patch_id(repo, oid).ok())
+        .collect();
+    let right_patch_ids: HashSet<String> = right_commits
+        .iter()
+        .filter_map(|oid| compute_patch_id(repo, oid).ok())
+        .collect();
+
+    // Mark left commits
+    let left_entries: Vec<CherryEntry> = left_commits
+        .iter()
+        .map(|oid| {
+            let patch_id = compute_patch_id(repo, oid).unwrap_or_default();
+            let is_equivalent = right_patch_ids.contains(&patch_id);
+            let marker = if is_equivalent { '=' } else { '+' };
+            let subject = get_commit_subject(repo, oid).unwrap_or_default();
+            CherryEntry {
+                oid: *oid,
+                marker,
+                subject,
+                patch_id: Some(patch_id),
+            }
+        })
+        .collect();
+
+    // Mark right commits
+    let right_entries: Vec<CherryEntry> = right_commits
+        .iter()
+        .map(|oid| {
+            let patch_id = compute_patch_id(repo, oid).unwrap_or_default();
+            let is_equivalent = left_patch_ids.contains(&patch_id);
+            let marker = if is_equivalent { '=' } else { '+' };
+            let subject = get_commit_subject(repo, oid).unwrap_or_default();
+            CherryEntry {
+                oid: *oid,
+                marker,
+                subject,
+                patch_id: Some(patch_id),
+            }
+        })
+        .collect();
+
+    Ok((left_entries, right_entries))
+}
+
+/// Compute a patch ID for a commit (public, for use by other modules).
+pub fn compute_patch_id_for(repo: &Repository, oid: &ObjectId) -> Result<String, RevWalkError> {
+    compute_patch_id(repo, oid)
 }
 
 /// Collect commits reachable from `include` but not from `exclude`.
