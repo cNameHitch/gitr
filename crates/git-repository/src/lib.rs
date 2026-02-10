@@ -256,6 +256,11 @@ impl Repository {
         &self.config
     }
 
+    /// Access the configuration mutably.
+    pub fn config_mut(&mut self) -> &mut ConfigSet {
+        &mut self.config
+    }
+
     /// Access the index (lazy-loaded).
     pub fn index(&mut self) -> Result<&Index, RepoError> {
         if self.index.is_none() {

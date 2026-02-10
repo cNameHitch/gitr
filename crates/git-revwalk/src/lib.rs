@@ -21,7 +21,7 @@ pub use range::{RevisionRange, resolve_revision};
 pub use merge_base::{merge_base, merge_base_one, is_ancestor};
 pub use commit_graph::{CommitGraph, CommitGraphEntry};
 pub use commit_graph::write::CommitGraphWriter;
-pub use pretty::{format_commit, format_builtin, FormatOptions, BuiltinFormat};
+pub use pretty::{format_commit, format_commit_with_decorations, format_builtin, format_builtin_with_decorations, FormatOptions, BuiltinFormat};
 pub use graph_draw::GraphDrawer;
 pub use objects::list_objects;
 pub use filter::ObjectFilter;

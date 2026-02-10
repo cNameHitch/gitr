@@ -2,6 +2,8 @@
 //!
 //! Supports format specifiers matching C git's `--format` / `--pretty` options.
 
+use std::collections::HashMap;
+
 use bstr::ByteSlice;
 use git_hash::ObjectId;
 use git_object::Commit;
@@ -79,8 +81,23 @@ pub fn format_commit(
     format: &str,
     options: &FormatOptions,
 ) -> String {
+    format_commit_with_decorations(commit, oid, format, options, None)
+}
+
+/// Format a commit with the given format string and optional decoration map.
+pub fn format_commit_with_decorations(
+    commit: &Commit,
+    oid: &ObjectId,
+    format: &str,
+    options: &FormatOptions,
+    decorations: Option<&HashMap<ObjectId, Vec<String>>>,
+) -> String {
     let mut result = String::new();
     let mut chars = format.chars().peekable();
+
+    let decoration_str = decorations
+        .and_then(|map| map.get(oid))
+        .map(|refs| refs.join(", "));
 
     while let Some(c) = chars.next() {
         if c == '%' {
@@ -125,6 +142,20 @@ pub fn format_commit(
                         })
                         .collect();
                     result.push_str(&parents.join(" "));
+                }
+                Some('d') => {
+                    // %d — decoration with parens and leading space
+                    chars.next();
+                    if let Some(ref dec) = decoration_str {
+                        result.push_str(&format!(" ({})", dec));
+                    }
+                }
+                Some('D') => {
+                    // %D — decoration without parens
+                    chars.next();
+                    if let Some(ref dec) = decoration_str {
+                        result.push_str(dec);
+                    }
                 }
                 Some('a') => {
                     chars.next();
@@ -260,12 +291,35 @@ pub fn format_builtin(
     preset: BuiltinFormat,
     options: &FormatOptions,
 ) -> String {
+    format_builtin_with_decorations(commit, oid, preset, options, None)
+}
+
+/// Format a commit with a built-in format preset and optional decorations.
+pub fn format_builtin_with_decorations(
+    commit: &Commit,
+    oid: &ObjectId,
+    preset: BuiltinFormat,
+    options: &FormatOptions,
+    decorations: Option<&HashMap<ObjectId, Vec<String>>>,
+) -> String {
+    let decoration_str = decorations
+        .and_then(|map| map.get(oid))
+        .map(|refs| refs.join(", "));
+
     match preset {
         BuiltinFormat::Oneline => {
             let hex = oid.to_hex();
-            let abbrev = &hex[..options.abbrev_len.min(hex.len())];
+            let display_hash = if options.abbrev_len < 40 {
+                &hex[..options.abbrev_len.min(hex.len())]
+            } else {
+                &hex
+            };
             let summary = String::from_utf8_lossy(commit.summary());
-            format!("{} {}", abbrev, summary)
+            if let Some(ref dec) = decoration_str {
+                format!("{} ({}) {}", display_hash, dec, summary)
+            } else {
+                format!("{} {}", display_hash, summary)
+            }
         }
         BuiltinFormat::Short => {
             let mut out = String::new();
@@ -388,7 +442,10 @@ pub fn format_builtin(
                 String::from_utf8_lossy(&commit.committer.to_bytes())
             ));
             out.push('\n');
-            out.push_str(&String::from_utf8_lossy(&commit.message));
+            let msg = String::from_utf8_lossy(&commit.message);
+            for line in msg.lines() {
+                out.push_str(&format!("    {}\n", line));
+            }
             out
         }
     }

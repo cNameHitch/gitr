@@ -67,18 +67,39 @@ pub fn run(args: &CleanArgs, cli: &Cli) -> Result<i32> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
-    clean_directory(&work_tree, &work_tree, &indexed_paths, &ignores, args, &mut out)?;
+    let mut items = Vec::new();
+    collect_clean_items(&work_tree, &work_tree, &indexed_paths, &ignores, args, &mut items)?;
+    items.sort();
+
+    for item in &items {
+        if args.dry_run {
+            writeln!(out, "Would remove {}", item)?;
+        } else {
+            let full = work_tree.join(item.trim_end_matches('/'));
+            if item.ends_with('/') {
+                if !args.quiet {
+                    writeln!(out, "Removing {}", item)?;
+                }
+                std::fs::remove_dir_all(&full)?;
+            } else {
+                if !args.quiet {
+                    writeln!(out, "Removing {}", item)?;
+                }
+                std::fs::remove_file(&full)?;
+            }
+        }
+    }
 
     Ok(0)
 }
 
-fn clean_directory(
+fn collect_clean_items(
     work_tree: &Path,
     dir: &Path,
     indexed: &std::collections::HashSet<BString>,
     ignores: &IgnoreStack,
     args: &CleanArgs,
-    out: &mut impl Write,
+    items: &mut Vec<String>,
 ) -> Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
@@ -95,46 +116,33 @@ fn clean_directory(
         let is_ignored = ignores.is_ignored(rel_bstr.as_ref(), is_dir);
 
         if args.only_ignored {
-            // Only remove ignored files
             if !is_ignored {
                 if is_dir {
-                    clean_directory(work_tree, &path, indexed, ignores, args, out)?;
+                    collect_clean_items(work_tree, &path, indexed, ignores, args, items)?;
                 }
                 continue;
             }
         } else if !args.ignored && is_ignored {
-            // Skip ignored files (default behavior)
             continue;
         }
 
         if is_dir {
             if args.directories {
-                // Check if directory contains any tracked files
                 let has_tracked = has_tracked_files(work_tree, &path, indexed);
                 if !has_tracked {
-                    if args.dry_run {
-                        writeln!(out, "Would remove {}/", rel.display())?;
-                    } else {
-                        if !args.quiet {
-                            writeln!(out, "Removing {}/", rel.display())?;
-                        }
-                        std::fs::remove_dir_all(&path)?;
-                    }
+                    items.push(format!("{}/", rel.display()));
                 } else {
-                    clean_directory(work_tree, &path, indexed, ignores, args, out)?;
+                    collect_clean_items(work_tree, &path, indexed, ignores, args, items)?;
                 }
             } else {
-                clean_directory(work_tree, &path, indexed, ignores, args, out)?;
+                // Without -d, only recurse into directories that contain tracked files
+                // (skip entirely untracked directories - matches git behavior)
+                if has_tracked_files(work_tree, &path, indexed) {
+                    collect_clean_items(work_tree, &path, indexed, ignores, args, items)?;
+                }
             }
         } else if !indexed.contains(&rel_bstr) {
-            if args.dry_run {
-                writeln!(out, "Would remove {}", rel.display())?;
-            } else {
-                if !args.quiet {
-                    writeln!(out, "Removing {}", rel.display())?;
-                }
-                std::fs::remove_file(&path)?;
-            }
+            items.push(format!("{}", rel.display()));
         }
     }
     Ok(())

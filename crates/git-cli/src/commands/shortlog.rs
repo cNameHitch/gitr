@@ -80,12 +80,14 @@ pub fn run(args: &ShortlogArgs, cli: &Cli) -> Result<i32> {
         entries.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
     }
 
-    for (author, subjects) in &entries {
+    for (author, subjects) in &mut entries {
+        // Reverse to show oldest-first (commits come from walker in newest-first order)
+        subjects.reverse();
         if args.summary {
             writeln!(out, "{:>6}\t{}", subjects.len(), author)?;
         } else {
             writeln!(out, "{} ({}):", author, subjects.len())?;
-            for subject in subjects {
+            for subject in subjects.iter() {
                 writeln!(out, "      {}", subject)?;
             }
             writeln!(out)?;
