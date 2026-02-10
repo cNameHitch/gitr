@@ -5,6 +5,7 @@ pub mod color;
 pub mod date;
 pub mod error;
 pub mod lockfile;
+pub mod mailmap;
 pub mod pager;
 pub mod path;
 pub mod progress;

@@ -31,6 +31,38 @@ pub struct SwitchArgs {
     #[arg(short, long)]
     pub force: bool,
 
+    /// Enable or disable DWIM (guess remote tracking branch)
+    #[arg(long, default_value_t = true)]
+    pub guess: bool,
+
+    /// Disable DWIM (guess remote tracking branch)
+    #[arg(long, overrides_with = "guess")]
+    pub no_guess: bool,
+
+    /// Suppress feedback messages
+    #[arg(short, long)]
+    pub quiet: bool,
+
+    /// Merge local changes when switching
+    #[arg(short, long)]
+    pub merge: bool,
+
+    /// Conflict style (merge or diff3)
+    #[arg(long, value_name = "style")]
+    pub conflict: Option<String>,
+
+    /// Create an orphan branch
+    #[arg(long, value_name = "new-branch")]
+    pub orphan: Option<String>,
+
+    /// Set up tracking mode
+    #[arg(short = 't', long, value_name = "mode")]
+    pub track: Option<String>,
+
+    /// Do not set up tracking
+    #[arg(long)]
+    pub no_track: bool,
+
     /// Branch or commit to switch to
     pub target: Option<String>,
 }

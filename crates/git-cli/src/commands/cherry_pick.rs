@@ -35,6 +35,38 @@ pub struct CherryPickArgs {
     #[arg(long)]
     skip: bool,
 
+    /// Select mainline parent for merge commits
+    #[arg(short = 'm', long)]
+    mainline: Option<u32>,
+
+    /// Append cherry-pick line to commit message
+    #[arg(short = 'x')]
+    append_cherry_picked_note: bool,
+
+    /// Add Signed-off-by trailer
+    #[arg(short = 's', long)]
+    signoff: bool,
+
+    /// Allow fast-forward
+    #[arg(long)]
+    ff: bool,
+
+    /// Merge strategy to use
+    #[arg(long)]
+    strategy: Option<String>,
+
+    /// Option for merge strategy
+    #[arg(short = 'X', long = "strategy-option")]
+    strategy_option: Vec<String>,
+
+    /// Allow empty commits
+    #[arg(long)]
+    allow_empty: bool,
+
+    /// Allow commits with empty messages
+    #[arg(long)]
+    allow_empty_message: bool,
+
     /// Commits to cherry-pick
     commits: Vec<String>,
 }

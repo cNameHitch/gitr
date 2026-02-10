@@ -49,6 +49,46 @@ pub struct FormatPatchArgs {
     #[arg(long)]
     stdout: bool,
 
+    /// Add Signed-off-by trailer
+    #[arg(short = 's', long)]
+    signoff: bool,
+
+    /// Suppress patch numbering
+    #[arg(short = 'N', long)]
+    no_numbered: bool,
+
+    /// Keep subject (don't strip Re: or [PATCH])
+    #[arg(short = 'k')]
+    keep_subject: bool,
+
+    /// Add To: header
+    #[arg(long)]
+    to: Vec<String>,
+
+    /// Add Cc: header
+    #[arg(long)]
+    cc: Vec<String>,
+
+    /// Use <ident> in From: header
+    #[arg(long, value_name = "ident")]
+    from: Option<String>,
+
+    /// Set In-Reply-To header
+    #[arg(long, value_name = "message-id")]
+    in_reply_to: Option<String>,
+
+    /// Set the base commit for the patch series
+    #[arg(long, value_name = "commit")]
+    base: Option<String>,
+
+    /// Mark the series as the <n>th iteration
+    #[arg(short = 'v', long, value_name = "n")]
+    reroll_count: Option<u32>,
+
+    /// Include a range-diff in the cover letter
+    #[arg(long, value_name = "refspec")]
+    range_diff: Option<String>,
+
     /// Revision range
     revision: String,
 }

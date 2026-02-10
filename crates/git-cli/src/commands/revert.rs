@@ -39,6 +39,22 @@ pub struct RevertArgs {
     #[arg(long)]
     skip: bool,
 
+    /// Select mainline parent for merge commits
+    #[arg(short = 'm', long)]
+    mainline: Option<u32>,
+
+    /// Add Signed-off-by trailer
+    #[arg(short = 's', long)]
+    signoff: bool,
+
+    /// Merge strategy to use
+    #[arg(long)]
+    strategy: Option<String>,
+
+    /// Option for merge strategy
+    #[arg(short = 'X', long = "strategy-option")]
+    strategy_option: Vec<String>,
+
     /// Commits to revert
     commits: Vec<String>,
 }

@@ -24,6 +24,78 @@ pub struct PullArgs {
     #[arg(short, long)]
     quiet: bool,
 
+    /// Be verbose
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Show diffstat after merge
+    #[arg(long)]
+    stat: bool,
+
+    /// Don't show diffstat
+    #[arg(long)]
+    no_stat: bool,
+
+    /// Append one-line log messages to merge commit
+    #[arg(long)]
+    log: bool,
+
+    /// Don't append one-line log messages
+    #[arg(long)]
+    no_log: bool,
+
+    /// Squash the merge into a single set of changes
+    #[arg(long)]
+    squash: bool,
+
+    /// Perform the merge and commit the result
+    #[arg(long)]
+    commit: bool,
+
+    /// Perform the merge but don't commit
+    #[arg(long)]
+    no_commit: bool,
+
+    /// Open editor for merge commit message
+    #[arg(short, long)]
+    edit: bool,
+
+    /// Allow fast-forward merges
+    #[arg(long)]
+    ff: bool,
+
+    /// Don't allow fast-forward merges
+    #[arg(long)]
+    no_ff: bool,
+
+    /// Merge strategy to use
+    #[arg(long)]
+    strategy: Option<String>,
+
+    /// Pass option to the merge strategy
+    #[arg(short = 'X', long = "strategy-option")]
+    strategy_option: Vec<String>,
+
+    /// Fetch all remotes
+    #[arg(long)]
+    all: bool,
+
+    /// Limit fetching to specified depth
+    #[arg(long)]
+    depth: Option<u32>,
+
+    /// Fetch all tags
+    #[arg(long)]
+    tags: bool,
+
+    /// Prune remote-tracking refs that no longer exist
+    #[arg(short, long)]
+    prune: bool,
+
+    /// Automatically stash/unstash before and after
+    #[arg(long)]
+    autostash: bool,
+
     /// Remote to pull from
     remote: Option<String>,
 
@@ -38,11 +110,21 @@ pub fn run(args: &PullArgs, cli: &Cli) -> Result<i32> {
     // Step 1: Fetch
     let remote = args.remote.as_deref().unwrap_or("origin");
     let fetch_args = fetch::FetchArgs {
-        all: false,
-        prune: false,
-        depth: None,
-        tags: false,
+        all: args.all,
+        prune: args.prune,
+        depth: args.depth,
+        tags: args.tags,
         quiet: args.quiet,
+        verbose: args.verbose,
+        force: false,
+        dry_run: false,
+        jobs: None,
+        shallow_since: None,
+        shallow_exclude: None,
+        unshallow: false,
+        deepen: None,
+        recurse_submodules: false,
+        set_upstream: false,
         remote: Some(remote.to_string()),
         refspec: if let Some(ref branch) = args.branch {
             vec![format!("refs/heads/{}:refs/remotes/{}/{}", branch, remote, branch)]
@@ -77,14 +159,25 @@ pub fn run(args: &PullArgs, cli: &Cli) -> Result<i32> {
     }
 
     let merge_args = merge::MergeArgs {
-        no_ff: false,
+        no_ff: args.no_ff,
         ff_only: args.ff_only,
-        squash: false,
+        squash: args.squash,
         abort: false,
         cont: false,
-        no_commit: false,
+        no_commit: args.no_commit,
         no_edit: false,
         message: None,
+        strategy: args.strategy.clone(),
+        strategy_option: args.strategy_option.clone(),
+        verbose: args.verbose,
+        quiet: args.quiet,
+        stat: args.stat,
+        no_stat: args.no_stat,
+        edit: args.edit,
+        allow_unrelated_histories: false,
+        signoff: false,
+        verify: false,
+        no_verify: false,
         commit: Some(merge_branch),
     };
 

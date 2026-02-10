@@ -32,9 +32,61 @@ pub struct RebaseArgs {
     #[arg(long)]
     skip: bool,
 
-    /// Interactive rebase
+    /// Interactive rebase (stub for Phase 8)
     #[arg(short, long)]
     interactive: bool,
+
+    /// Be quiet
+    #[arg(short, long)]
+    quiet: bool,
+
+    /// Be verbose
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Add Signed-off-by trailer to commits
+    #[arg(long)]
+    signoff: bool,
+
+    /// Force rebase even if current branch is up to date
+    #[arg(short = 'f', long)]
+    force_rebase: bool,
+
+    /// Automatically squash fixup commits
+    #[arg(long)]
+    autosquash: bool,
+
+    /// Do not automatically squash fixup commits
+    #[arg(long)]
+    no_autosquash: bool,
+
+    /// Automatically stash/unstash before and after
+    #[arg(long)]
+    autostash: bool,
+
+    /// Do not automatically stash/unstash
+    #[arg(long)]
+    no_autostash: bool,
+
+    /// Automatically update refs that point to rebased commits
+    #[arg(long)]
+    update_refs: bool,
+
+    /// Execute a shell command after each commit
+    #[arg(short = 'x', long)]
+    exec: Option<String>,
+
+    /// Rebase all reachable commits from root
+    #[arg(long)]
+    root: bool,
+
+    /// Merge strategy to use
+    #[arg(short = 's', long = "strategy")]
+    strategy: Option<String>,
+
+    /// Pass option to the merge strategy
+    #[arg(short = 'X', long = "strategy-option")]
+    strategy_option: Vec<String>,
 
     /// Upstream branch
     upstream: Option<String>,

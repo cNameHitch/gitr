@@ -509,6 +509,7 @@ name = "git-diff"
 version = "0.1.1-alpha.13"
 dependencies = [
  "bstr",
+ "git-config",
  "git-hash",
  "git-index",
  "git-object",
@@ -516,6 +517,7 @@ dependencies = [
  "git-repository",
  "git-utils",
  "rayon",
+ "regex",
  "tempfile",
  "thiserror",
 ]
@@ -538,6 +540,7 @@ name = "git-index"
 version = "0.1.1-alpha.13"
 dependencies = [
  "bstr",
+ "git-config",
  "git-hash",
  "git-object",
  "git-odb",
@@ -572,6 +575,7 @@ dependencies = [
  "git-odb",
  "git-repository",
  "git-utils",
+ "sha1",
  "tempfile",
  "thiserror",
 ]
@@ -682,6 +686,7 @@ name = "git-transport"
 version = "0.1.1-alpha.13"
 dependencies = [
  "bstr",
+ "git-config",
  "git-hash",
  "git-utils",
  "tempfile",

@@ -32,6 +32,54 @@ pub struct CloneArgs {
     #[arg(short, long)]
     quiet: bool,
 
+    /// Be verbose
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Set up a mirror clone (implies --bare)
+    #[arg(long)]
+    mirror: bool,
+
+    /// Clone from a local repository
+    #[arg(short, long)]
+    local: bool,
+
+    /// Clone only a single branch
+    #[arg(long)]
+    single_branch: bool,
+
+    /// Clone all branches (negate --single-branch)
+    #[arg(long)]
+    no_single_branch: bool,
+
+    /// Initialize submodules in the clone
+    #[arg(long)]
+    recurse_submodules: bool,
+
+    /// Create a shallow clone with commits newer than a date
+    #[arg(long, value_name = "date")]
+    shallow_since: Option<String>,
+
+    /// Create a shallow clone excluding commits reachable from a revision
+    #[arg(long, value_name = "revision")]
+    shallow_exclude: Option<String>,
+
+    /// Don't clone any tags
+    #[arg(long)]
+    no_tags: bool,
+
+    /// Object filtering (partial clone)
+    #[arg(long, value_name = "filter-spec")]
+    filter: Option<String>,
+
+    /// Use <name> instead of 'origin' for the remote
+    #[arg(long, value_name = "name")]
+    origin: Option<String>,
+
+    /// Initialize sparse-checkout
+    #[arg(long)]
+    sparse: bool,
+
     /// Repository URL
     repository: String,
 
@@ -99,8 +147,11 @@ pub fn run(args: &CloneArgs, _cli: &Cli) -> Result<i32> {
 
         let fetch_opts = git_protocol::fetch::FetchOptions {
             depth: args.depth,
+            shallow_since: args.shallow_since.clone(),
+            shallow_exclude: args.shallow_exclude.clone(),
             filter: None,
             progress: !args.quiet,
+            ..Default::default()
         };
 
         let pack_dir = repo.common_dir().join("objects").join("pack");

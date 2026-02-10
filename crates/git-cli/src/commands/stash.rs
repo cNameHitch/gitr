@@ -31,6 +31,18 @@ pub enum StashSubcommand {
         /// Include untracked files
         #[arg(short = 'u', long)]
         include_untracked: bool,
+
+        /// Keep the index (don't unstage)
+        #[arg(short = 'k', long)]
+        keep_index: bool,
+
+        /// Stash only staged changes
+        #[arg(short = 'S', long)]
+        staged: bool,
+
+        /// Interactively select hunks to stash (stub)
+        #[arg(short = 'p', long)]
+        patch: bool,
     },
     /// Restore the most recent stash
     Pop {
@@ -53,13 +65,32 @@ pub enum StashSubcommand {
     },
     /// Remove all stash entries
     Clear,
+    /// Create a stash branch
+    Branch {
+        /// Name of the branch to create
+        branch_name: String,
+
+        /// Stash entry to apply
+        stash: Option<usize>,
+    },
+    /// Create a stash entry without storing it
+    Create,
+    /// Store a stash entry created via create
+    Store {
+        /// Commit object to store
+        commit: String,
+
+        /// Message for the stash entry
+        #[arg(short, long)]
+        message: Option<String>,
+    },
 }
 
 pub fn run(args: &StashArgs, cli: &Cli) -> Result<i32> {
     match &args.command {
         None | Some(StashSubcommand::Push { .. }) => {
             let (message, include_untracked) = match &args.command {
-                Some(StashSubcommand::Push { message, include_untracked }) => {
+                Some(StashSubcommand::Push { message, include_untracked, .. }) => {
                     (message.clone(), *include_untracked)
                 }
                 _ => (None, false),
@@ -72,6 +103,15 @@ pub fn run(args: &StashArgs, cli: &Cli) -> Result<i32> {
         Some(StashSubcommand::Show { stash }) => stash_show(cli, stash.unwrap_or(0)),
         Some(StashSubcommand::Drop { stash }) => stash_drop(cli, stash.unwrap_or(0)),
         Some(StashSubcommand::Clear) => stash_clear(cli),
+        Some(StashSubcommand::Branch { branch_name: _, stash: _ }) => {
+            bail!("stash branch: not yet implemented")
+        }
+        Some(StashSubcommand::Create) => {
+            bail!("stash create: not yet implemented")
+        }
+        Some(StashSubcommand::Store { commit: _, message: _ }) => {
+            bail!("stash store: not yet implemented")
+        }
     }
 }
 

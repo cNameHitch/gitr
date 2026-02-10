@@ -34,6 +34,14 @@ pub struct CleanArgs {
     /// Be quiet
     #[arg(short, long)]
     quiet: bool,
+
+    /// Interactive clean (stub)
+    #[arg(short = 'i')]
+    interactive: bool,
+
+    /// Additional exclude patterns
+    #[arg(short = 'e', long = "exclude")]
+    exclude: Vec<String>,
 }
 
 pub fn run(args: &CleanArgs, cli: &Cli) -> Result<i32> {

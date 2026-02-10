@@ -1,4 +1,4 @@
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 
 use anyhow::Result;
 use bstr::ByteSlice;
@@ -7,7 +7,11 @@ use git_diff::format::format_diff;
 use git_diff::{DiffOptions, DiffOutputFormat};
 use git_hash::ObjectId;
 use git_object::{Commit, Object};
-use git_revwalk::{format_builtin, format_commit, BuiltinFormat, FormatOptions};
+use git_revwalk::{
+    format_builtin, format_builtin_with_decorations, format_commit_with_decorations,
+    BuiltinFormat, FormatOptions,
+};
+use git_utils::color::{ColorConfig, ColorSlot};
 
 use super::open_repo;
 use crate::Cli;
@@ -34,6 +38,18 @@ pub struct ShowArgs {
     #[arg(short = 's', long)]
     no_patch: bool,
 
+    /// When to show colored output (auto, always, never)
+    #[arg(long, value_name = "when")]
+    color: Option<String>,
+
+    /// Show ref decorations on commits
+    #[arg(long)]
+    decorate: bool,
+
+    /// Suppress diff output (same as --no-patch)
+    #[arg(short = 'q', long)]
+    quiet: bool,
+
     /// Object to show (defaults to HEAD)
     #[arg(default_value = "HEAD")]
     object: String,
@@ -43,6 +59,19 @@ pub fn run(args: &ShowArgs, cli: &Cli) -> Result<i32> {
     let repo = open_repo(cli)?;
     let stdout = io::stdout();
     let mut out = stdout.lock();
+
+    // Determine color settings
+    let color_config = load_color_config(&repo);
+    let cli_color = args.color.as_deref().map(git_utils::color::parse_color_mode);
+    let effective = color_config.effective_mode("show", cli_color);
+    let color_on = git_utils::color::use_color(effective, io::stdout().is_terminal());
+
+    // Build decoration map if --decorate is set
+    let decorations = if args.decorate {
+        Some(super::log::build_decoration_map_for_show(&repo)?)
+    } else {
+        None
+    };
 
     // Handle tree:path syntax (e.g., HEAD:file.txt)
     if args.object.contains(':') {
@@ -55,11 +84,33 @@ pub fn run(args: &ShowArgs, cli: &Cli) -> Result<i32> {
         .read(&oid)?
         .ok_or_else(|| anyhow::anyhow!("object not found: {}", oid))?;
 
+    // Capture output into a buffer, then colorize if needed
+    let mut buf = Vec::new();
     match obj {
-        Object::Commit(commit) => show_commit(&repo, &commit, &oid, args, &mut out)?,
-        Object::Tag(tag) => show_tag(&repo, &tag, &oid, &mut out)?,
-        Object::Tree(tree) => show_tree(&tree, &oid, &mut out)?,
-        Object::Blob(blob) => show_blob(&blob, &mut out)?,
+        Object::Commit(commit) => {
+            show_commit(&repo, &commit, &oid, args, decorations.as_ref(), &mut buf)?;
+        }
+        Object::Tag(tag) => show_tag(&repo, &tag, &oid, &mut buf)?,
+        Object::Tree(tree) => show_tree(&tree, &oid, &mut buf)?,
+        Object::Blob(blob) => show_blob(&blob, &mut buf)?,
+    }
+
+    if color_on {
+        let text = String::from_utf8_lossy(&buf);
+        let mut in_diff = false;
+        let lines: Vec<&str> = text.split('\n').collect();
+        // split('\n') on "a\nb\n" gives ["a", "b", ""], so skip trailing empty
+        let count = if lines.last() == Some(&"") {
+            lines.len() - 1
+        } else {
+            lines.len()
+        };
+        for line in &lines[..count] {
+            let colored = colorize_show_line(line, &color_config, &mut in_diff);
+            writeln!(out, "{}", colored)?;
+        }
+    } else {
+        out.write_all(&buf)?;
     }
 
     Ok(0)
@@ -70,6 +121,7 @@ fn show_commit(
     commit: &Commit,
     oid: &ObjectId,
     args: &ShowArgs,
+    decorations: Option<&std::collections::HashMap<ObjectId, Vec<String>>>,
     out: &mut impl Write,
 ) -> Result<()> {
     let format_options = FormatOptions { abbrev_len: 40, ..FormatOptions::default() };
@@ -96,7 +148,8 @@ fn show_commit(
     };
 
     if let Some(ref fmt) = custom_format {
-        let formatted = format_commit(commit, oid, fmt, &format_options);
+        let formatted =
+            format_commit_with_decorations(commit, oid, fmt, &format_options, decorations);
         write!(out, "{}", formatted)?;
         writeln!(out)?;
     } else {
@@ -109,7 +162,13 @@ fn show_commit(
         {
             // The builtin format starts with "commit <oid>\n".
             // We need to inject "Merge: <parent1> <parent2>" after that line.
-            let formatted = format_builtin(commit, oid, preset, &format_options);
+            let formatted = format_builtin_with_decorations(
+                commit,
+                oid,
+                preset,
+                &format_options,
+                decorations,
+            );
             let mut lines = formatted.splitn(2, '\n');
             if let Some(first_line) = lines.next() {
                 writeln!(out, "{}", first_line)?;
@@ -125,7 +184,13 @@ fn show_commit(
                 }
             }
         } else {
-            let formatted = format_builtin(commit, oid, preset, &format_options);
+            let formatted = format_builtin_with_decorations(
+                commit,
+                oid,
+                preset,
+                &format_options,
+                decorations,
+            );
             write!(out, "{}", formatted)?;
         }
 
@@ -134,8 +199,9 @@ fn show_commit(
         }
     }
 
-    // Show diff unless --no-patch
-    if !args.no_patch && custom_format.is_none() {
+    // Show diff unless --no-patch or --quiet
+    let suppress_diff = args.no_patch || args.quiet;
+    if !suppress_diff && custom_format.is_none() {
         let parent_tree = if let Some(parent_oid) = commit.first_parent() {
             let parent_obj = repo.odb().read(parent_oid)?;
             match parent_obj {
@@ -312,4 +378,52 @@ fn resolve_tree_path(
     }
 
     Ok(current_oid)
+}
+
+/// Load color configuration from the repository config (best-effort).
+fn load_color_config(repo: &git_repository::Repository) -> ColorConfig {
+    let config = repo.config();
+    ColorConfig::from_config(|key| config.get_string(key).ok().flatten())
+}
+
+/// Colorize a single line of `show` output (commit header + diff).
+fn colorize_show_line(line: &str, cc: &ColorConfig, in_diff: &mut bool) -> String {
+    let reset = cc.get_color(ColorSlot::Reset);
+
+    if line.starts_with("commit ") && !*in_diff {
+        let hash_color = "\x1b[33m"; // yellow, matching C git
+        return format!("{}{}{}", hash_color, line, reset);
+    }
+
+    if line.starts_with("diff --git") {
+        *in_diff = true;
+        return format!("{}{}{}", cc.get_color(ColorSlot::DiffMetaInfo), line, reset);
+    }
+
+    if *in_diff {
+        if line.starts_with("---")
+            || line.starts_with("+++")
+            || line.starts_with("index ")
+            || line.starts_with("old mode")
+            || line.starts_with("new mode")
+            || line.starts_with("new file")
+            || line.starts_with("deleted file")
+            || line.starts_with("similarity")
+            || line.starts_with("rename")
+            || line.starts_with("copy")
+        {
+            return format!("{}{}{}", cc.get_color(ColorSlot::DiffMetaInfo), line, reset);
+        }
+        if line.starts_with("@@") {
+            return format!("{}{}{}", cc.get_color(ColorSlot::DiffFragInfo), line, reset);
+        }
+        if line.starts_with('-') {
+            return format!("{}{}{}", cc.get_color(ColorSlot::DiffOldNormal), line, reset);
+        }
+        if line.starts_with('+') {
+            return format!("{}{}{}", cc.get_color(ColorSlot::DiffNewNormal), line, reset);
+        }
+    }
+
+    line.to_string()
 }

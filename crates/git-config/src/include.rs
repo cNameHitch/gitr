@@ -25,9 +25,10 @@ pub fn process_includes(
     let mut include_stack: HashSet<PathBuf> = HashSet::new();
     let mut depth: usize = 0;
 
-    // Process each file's includes
-    // We need to iterate through files and potentially insert new ones,
-    // so we use an index-based approach.
+    // Process each file's includes.
+    // We iterate with an index and newly-inserted files are placed right
+    // after the current file, so subsequent iterations will process them
+    // (enabling chained includes A -> B -> C).
     let mut i = 0;
     while i < files.len() {
         let includes = collect_includes(&files[i]);
@@ -37,8 +38,11 @@ pub fn process_includes(
             .map(|p| p.to_path_buf());
         let file_scope = files[i].scope();
 
+        // Track this file in the include stack (use canonical path for
+        // reliable circular-include detection on macOS /var -> /private/var).
         if let Some(path) = files[i].path() {
-            include_stack.insert(path.to_path_buf());
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            include_stack.insert(canonical);
         }
 
         let mut insert_offset = 1;
@@ -81,7 +85,10 @@ pub fn process_includes(
             }
         }
 
-        i += insert_offset;
+        // Advance past just the current file. Newly-inserted included
+        // files sit at i+1..i+insert_offset and will be processed on
+        // subsequent iterations, enabling chained includes.
+        i += 1;
     }
 
     Ok(())

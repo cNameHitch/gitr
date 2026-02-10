@@ -32,6 +32,34 @@ pub struct DescribeArgs {
     #[arg(long, default_value = "7")]
     abbrev: usize,
 
+    /// Find the tag that contains the commit
+    #[arg(long)]
+    contains: bool,
+
+    /// Use any ref, not just tags
+    #[arg(long)]
+    all: bool,
+
+    /// Follow only the first parent
+    #[arg(long)]
+    first_parent: bool,
+
+    /// Only output exact matches
+    #[arg(long)]
+    exact_match: bool,
+
+    /// Consider up to <n> candidate tags
+    #[arg(long)]
+    candidates: Option<u32>,
+
+    /// Only consider tags matching the given glob pattern
+    #[arg(long = "match", value_name = "pattern")]
+    match_pattern: Vec<String>,
+
+    /// Exclude tags matching the given glob pattern
+    #[arg(long, value_name = "pattern")]
+    exclude: Vec<String>,
+
     /// Commit to describe (defaults to HEAD)
     commit: Option<String>,
 }

@@ -16,6 +16,7 @@ git-index = { workspace = true }
 git-diff = { workspace = true }
 git-repository = { workspace = true }
 bstr = { workspace = true }
+sha1 = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

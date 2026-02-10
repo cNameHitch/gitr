@@ -6,9 +6,12 @@
 
 pub mod attributes;
 pub mod entry;
+pub mod eol;
 pub mod extensions;
+pub mod filter;
 pub mod ignore;
 pub mod pathspec;
+pub mod sparse;
 mod read;
 mod write;
 

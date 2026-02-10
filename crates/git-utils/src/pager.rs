@@ -89,6 +89,38 @@ fn resolve_pager_from(
     Some("less".to_string())
 }
 
+/// Set up a pager and redirect stdout to it.
+///
+/// This is the high-level API for pager setup. After calling this:
+/// - All writes to stdout() will flow through the pager
+/// - The returned guard MUST be kept alive until output is complete
+/// - When the guard is dropped, stdout is flushed and the pager is waited on
+#[cfg(unix)]
+pub fn setup_pager_for_stdout(config_pager: Option<&str>) -> Result<Option<PagerGuard>> {
+    let guard = setup_pager(config_pager)?;
+    if let Some(mut guard) = guard {
+        use std::os::unix::io::AsRawFd;
+        if let Some(stdin) = guard.stdin() {
+            let pager_fd = stdin.as_raw_fd();
+            unsafe {
+                libc::dup2(pager_fd, libc::STDOUT_FILENO);
+            }
+        }
+        Ok(Some(guard))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Non-unix fallback: set up a pager without stdout redirection.
+///
+/// On non-unix platforms, pager integration is not supported.
+/// Returns None so that output goes directly to stdout.
+#[cfg(not(unix))]
+pub fn setup_pager_for_stdout(_config_pager: Option<&str>) -> Result<Option<PagerGuard>> {
+    Ok(None)
+}
+
 /// Check if a pager is currently in use (by checking GIT_PAGER_IN_USE env var).
 ///
 /// Matches C git's `pager_in_use()`.

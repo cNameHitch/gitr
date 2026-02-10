@@ -1,9 +1,10 @@
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 
 use anyhow::{bail, Result};
 use bstr::BString;
 use clap::Args;
 use git_ref::{RefName, RefStore};
+use git_utils::color::{self, ColorConfig, ColorSlot};
 
 use crate::Cli;
 use super::open_repo;
@@ -54,6 +55,50 @@ pub struct BranchArgs {
     #[arg(long)]
     show_current: bool,
 
+    /// When to show colored output (auto, always, never)
+    #[arg(long, value_name = "when")]
+    color: Option<String>,
+
+    /// Set up tracking mode
+    #[arg(short = 't', long)]
+    track: bool,
+
+    /// Do not set up tracking
+    #[arg(long)]
+    no_track: bool,
+
+    /// Change the upstream info for an existing branch
+    #[arg(short = 'u', long)]
+    set_upstream_to: Option<String>,
+
+    /// Remove upstream tracking info
+    #[arg(long)]
+    unset_upstream: bool,
+
+    /// Copy a branch and its reflog
+    #[arg(short = 'c')]
+    copy: bool,
+
+    /// Force copy a branch (overwrite existing)
+    #[arg(short = 'C')]
+    force_copy: bool,
+
+    /// Only list branches merged into the named commit
+    #[arg(long, num_args = 0..=1, default_missing_value = "HEAD")]
+    merged: Option<String>,
+
+    /// Only list branches not merged into the named commit
+    #[arg(long, num_args = 0..=1, default_missing_value = "HEAD")]
+    no_merged: Option<String>,
+
+    /// Sort branches by the given key
+    #[arg(long)]
+    sort: Option<String>,
+
+    /// Force creation, move/rename, or deletion
+    #[arg(short = 'f', long)]
+    force: bool,
+
     /// Branch name (for create/delete/rename)
     name: Option<String>,
 
@@ -89,7 +134,12 @@ pub fn run(args: &BranchArgs, cli: &Cli) -> Result<i32> {
     }
 
     // Default: list branches
-    list_branches(&repo, args, &mut out)
+    let cli_color = args.color.as_deref().map(color::parse_color_mode);
+    let color_config = load_color_config(cli);
+    let effective = color_config.effective_mode("branch", cli_color);
+    let color_on = color::use_color(effective, io::stdout().is_terminal());
+
+    list_branches(&repo, args, color_on, &color_config, &mut out)
 }
 
 fn create_branch(repo: &git_repository::Repository, name: &str, start: Option<&str>) -> Result<i32> {
@@ -196,9 +246,12 @@ fn rename_branch(
 fn list_branches(
     repo: &git_repository::Repository,
     args: &BranchArgs,
+    color_on: bool,
+    cc: &ColorConfig,
     out: &mut impl Write,
 ) -> Result<i32> {
     let current_branch = repo.current_branch().unwrap_or(None);
+    let reset = if color_on { cc.get_color(ColorSlot::Reset) } else { "" };
 
     // Resolve --contains commit if provided
     let contains_oid = if let Some(ref contains_spec) = args.contains {
@@ -241,7 +294,11 @@ fn list_branches(
         };
 
         for (i, (short, is_current)) in branches.iter().enumerate() {
-            let prefix = if *is_current { "* " } else { "  " };
+            let (prefix, color_code) = if *is_current {
+                ("* ", if color_on { cc.get_color(ColorSlot::BranchCurrent) } else { "" })
+            } else {
+                ("  ", if color_on { cc.get_color(ColorSlot::BranchLocal) } else { "" })
+            };
 
             if args.verbose {
                 if let Ok(oid) = ref_map[i].peel_to_oid(repo.refs()) {
@@ -253,25 +310,40 @@ fn list_branches(
                         }
                         _ => String::new(),
                     };
-                    writeln!(out, "{}{:<width$} {} {}", prefix, short, short_hash, subject, width = max_name_len)?;
+                    writeln!(out, "{}{}{:<width$}{} {} {}", prefix, color_code, short, reset, short_hash, subject, width = max_name_len)?;
                 } else {
-                    writeln!(out, "{}{}", prefix, short)?;
+                    writeln!(out, "{}{}{}{}", prefix, color_code, short, reset)?;
                 }
             } else {
-                writeln!(out, "{}{}", prefix, short)?;
+                writeln!(out, "{}{}{}{}", prefix, color_code, short, reset)?;
             }
         }
     }
 
     if args.remotes || args.all {
+        let remote_color = if color_on { cc.get_color(ColorSlot::BranchRemote) } else { "" };
         let refs = repo.refs().iter(Some("refs/remotes/"))?;
         for r in refs {
             let r = r?;
             let full_name = r.name().as_str().to_string();
             let short = full_name.strip_prefix("refs/remotes/").unwrap_or(&full_name);
-            writeln!(out, "  {}", short)?;
+            writeln!(out, "  {}{}{}", remote_color, short, reset)?;
         }
     }
 
     Ok(0)
+}
+
+fn load_color_config(cli: &Cli) -> ColorConfig {
+    let config = if let Some(ref git_dir) = cli.git_dir {
+        git_config::ConfigSet::load(Some(git_dir)).ok()
+    } else {
+        git_repository::Repository::discover(".")
+            .ok()
+            .and_then(|repo| git_config::ConfigSet::load(Some(repo.git_dir())).ok())
+    };
+    match config {
+        Some(c) => ColorConfig::from_config(|key| c.get_string(key).ok().flatten()),
+        None => ColorConfig::new(),
+    }
 }

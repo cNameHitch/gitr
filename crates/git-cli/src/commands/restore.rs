@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::{bail, Result};
 use bstr::BString;
 use clap::Args;
@@ -22,6 +24,34 @@ pub struct RestoreArgs {
     #[arg(short, long, value_name = "tree-ish")]
     pub source: Option<String>,
 
+    /// Overlay mode (keep files not in source)
+    #[arg(long)]
+    pub overlay: bool,
+
+    /// No overlay mode (remove files not in source)
+    #[arg(long)]
+    pub no_overlay: bool,
+
+    /// Conflict style (merge, diff3)
+    #[arg(long)]
+    pub conflict: Option<String>,
+
+    /// Use our version for unmerged files
+    #[arg(long)]
+    pub ours: bool,
+
+    /// Use their version for unmerged files
+    #[arg(long)]
+    pub theirs: bool,
+
+    /// Read pathspecs from file
+    #[arg(long)]
+    pub pathspec_from_file: Option<PathBuf>,
+
+    /// Interactively select hunks to restore (stub)
+    #[arg(short = 'p', long)]
+    pub patch: bool,
+
     /// Files to restore
     #[arg(required = true)]
     pub files: Vec<String>,
@@ -34,6 +64,13 @@ impl RestoreArgs {
             source: None,
             staged: false,
             worktree: true,
+            overlay: false,
+            no_overlay: false,
+            conflict: None,
+            ours: false,
+            theirs: false,
+            pathspec_from_file: None,
+            patch: false,
             files: paths,
         }
     }

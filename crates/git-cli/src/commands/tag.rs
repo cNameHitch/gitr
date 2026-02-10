@@ -1,4 +1,5 @@
 use std::io::{self, Write};
+use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 use bstr::BString;
@@ -39,6 +40,46 @@ pub struct TagArgs {
     /// Show tag annotation (up to N lines)
     #[arg(short = 'n', num_args = 0..=1, default_missing_value = "1")]
     show_annotation: Option<usize>,
+
+    /// GPG sign the tag
+    #[arg(short = 's', long)]
+    sign: bool,
+
+    /// GPG key to use for signing
+    #[arg(short = 'u', long)]
+    local_user: Option<String>,
+
+    /// Read tag message from file
+    #[arg(short = 'F')]
+    file: Option<PathBuf>,
+
+    /// Sort order (e.g., version:refname)
+    #[arg(long)]
+    sort: Option<String>,
+
+    /// Only list tags that contain the specified commit
+    #[arg(long)]
+    contains: Option<String>,
+
+    /// Only list tags that do not contain the specified commit
+    #[arg(long)]
+    no_contains: Option<String>,
+
+    /// Only list tags whose tips are reachable from the specified commit
+    #[arg(long, num_args = 0..=1, default_missing_value = "HEAD")]
+    merged: Option<String>,
+
+    /// Only list tags whose tips are not reachable from the specified commit
+    #[arg(long, num_args = 0..=1, default_missing_value = "HEAD")]
+    no_merged: Option<String>,
+
+    /// Format string for tag list output
+    #[arg(long)]
+    format: Option<String>,
+
+    /// Only list tags of the given object
+    #[arg(long)]
+    points_at: Option<String>,
 
     /// Tag name
     name: Option<String>,

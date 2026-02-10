@@ -9,6 +9,7 @@ pub mod apply;
 pub mod cherry_pick;
 pub mod conflict;
 pub mod content;
+pub mod rerere;
 pub mod revert;
 pub mod sequencer;
 pub mod strategy;
@@ -59,6 +60,35 @@ pub enum MergeStrategyType {
     Ours,
     /// Subtree merge.
     Subtree,
+    /// Octopus merge (3+ branches).
+    Octopus,
+}
+
+impl MergeStrategyType {
+    /// Parse a strategy name string (as used by `git merge -s <strategy>`).
+    ///
+    /// Accepted values: "ort", "recursive", "ours", "subtree", "octopus".
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "ort" => Some(Self::Ort),
+            "recursive" => Some(Self::Recursive),
+            "ours" => Some(Self::Ours),
+            "subtree" => Some(Self::Subtree),
+            "octopus" => Some(Self::Octopus),
+            _ => None,
+        }
+    }
+
+    /// Return the canonical name for this strategy.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Ort => "ort",
+            Self::Recursive => "recursive",
+            Self::Ours => "ours",
+            Self::Subtree => "subtree",
+            Self::Octopus => "octopus",
+        }
+    }
 }
 
 /// Conflict marker style.
@@ -70,6 +100,29 @@ pub enum ConflictStyle {
     Diff3,
     /// Zealous diff3: reduce conflict size by pulling out common prefix/suffix.
     ZDiff3,
+}
+
+impl ConflictStyle {
+    /// Parse a conflict style name (as used by `merge.conflictStyle` config).
+    ///
+    /// Accepted values: "merge", "diff3", "zdiff3".
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "merge" => Some(Self::Merge),
+            "diff3" => Some(Self::Diff3),
+            "zdiff3" => Some(Self::ZDiff3),
+            _ => None,
+        }
+    }
+
+    /// Return the canonical config name for this style.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Merge => "merge",
+            Self::Diff3 => "diff3",
+            Self::ZDiff3 => "zdiff3",
+        }
+    }
 }
 
 /// Result of a merge operation.

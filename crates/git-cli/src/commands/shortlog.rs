@@ -5,6 +5,7 @@ use anyhow::Result;
 use clap::Args;
 use git_object::Object;
 use git_revwalk::RevWalk;
+use git_utils::color::ColorConfig;
 
 use super::open_repo;
 use crate::Cli;
@@ -27,6 +28,26 @@ pub struct ShortlogArgs {
     #[arg(long)]
     all: bool,
 
+    /// When to show colored output (auto, always, never)
+    #[arg(long, value_name = "when")]
+    color: Option<String>,
+
+    /// Group by committer instead of author
+    #[arg(short = 'c', long)]
+    committer: bool,
+
+    /// Line wrapping (width[,indent1[,indent2]])
+    #[arg(short = 'w')]
+    wrap: Option<String>,
+
+    /// Grouping key (author, committer, trailer:<key>)
+    #[arg(long)]
+    group: Option<String>,
+
+    /// Apply mailmap transformations
+    #[arg(long)]
+    use_mailmap: bool,
+
     /// Revisions
     revisions: Vec<String>,
 }
@@ -34,6 +55,11 @@ pub struct ShortlogArgs {
 pub fn run(args: &ShortlogArgs, cli: &Cli) -> Result<i32> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
+
+    // Determine color settings (used for consistency; shortlog has minimal coloring)
+    let cli_color = args.color.as_deref().map(git_utils::color::parse_color_mode);
+    // Color config will be loaded from repo if available, otherwise use defaults
+    let mut color_config_holder: Option<ColorConfig> = None;
 
     // Group commits by author
     let mut authors: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -95,6 +121,11 @@ pub fn run(args: &ShortlogArgs, cli: &Cli) -> Result<i32> {
         }
     } else {
         let repo = open_repo(cli)?;
+        color_config_holder = Some(load_color_config(&repo));
+
+        // Load mailmap if --use-mailmap or log.mailmap config is set
+        let mailmap = load_mailmap(&repo, args.use_mailmap);
+
         let mut walker = RevWalk::new(&repo)?;
 
         if args.all {
@@ -116,8 +147,19 @@ pub fn run(args: &ShortlogArgs, cli: &Cli) -> Result<i32> {
             let oid = oid_result?;
             let obj = repo.odb().read(&oid)?;
             if let Some(Object::Commit(commit)) = obj {
-                let author_name = String::from_utf8_lossy(&commit.author.name).to_string();
-                let author_email = String::from_utf8_lossy(&commit.author.email).to_string();
+                // Apply mailmap transformations if enabled
+                let (author_name, author_email) = if let Some(ref mm) = mailmap {
+                    let (name, email) = mm.lookup(&commit.author.name, &commit.author.email);
+                    (
+                        String::from_utf8_lossy(&name).to_string(),
+                        String::from_utf8_lossy(&email).to_string(),
+                    )
+                } else {
+                    (
+                        String::from_utf8_lossy(&commit.author.name).to_string(),
+                        String::from_utf8_lossy(&commit.author.email).to_string(),
+                    )
+                };
 
                 let key = if args.email {
                     format!("{} <{}>", author_name, author_email)
@@ -130,6 +172,11 @@ pub fn run(args: &ShortlogArgs, cli: &Cli) -> Result<i32> {
             }
         }
     }
+
+    // Determine effective color mode
+    let cc = color_config_holder.unwrap_or_default();
+    let effective = cc.effective_mode("shortlog", cli_color);
+    let _color_on = git_utils::color::use_color(effective, io::stdout().is_terminal());
 
     // Sort by count if requested
     let mut entries: Vec<(String, Vec<String>)> = authors.into_iter().collect();
@@ -152,4 +199,36 @@ pub fn run(args: &ShortlogArgs, cli: &Cli) -> Result<i32> {
     }
 
     Ok(0)
+}
+
+/// Load color configuration from the repository config (best-effort).
+fn load_color_config(repo: &git_repository::Repository) -> ColorConfig {
+    let config = repo.config();
+    ColorConfig::from_config(|key| config.get_string(key).ok().flatten())
+}
+
+/// Load mailmap if --use-mailmap flag is passed or log.mailmap config is true.
+fn load_mailmap(
+    repo: &git_repository::Repository,
+    use_mailmap_flag: bool,
+) -> Option<git_utils::mailmap::Mailmap> {
+    let config_mailmap = repo
+        .config()
+        .get_bool("log.mailmap")
+        .ok()
+        .flatten()
+        .unwrap_or(false);
+
+    if !use_mailmap_flag && !config_mailmap {
+        return None;
+    }
+
+    let work_tree = repo.work_tree().map(|p| p.to_path_buf());
+    if let Some(ref wt) = work_tree {
+        let mailmap_path = wt.join(".mailmap");
+        if mailmap_path.exists() {
+            return git_utils::mailmap::Mailmap::from_file(&mailmap_path).ok();
+        }
+    }
+    None
 }

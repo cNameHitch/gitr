@@ -31,6 +31,22 @@ pub struct ResetArgs {
     #[arg(long)]
     merge: bool,
 
+    /// Reset keeping local changes (like --hard but keeps uncommitted changes)
+    #[arg(long)]
+    keep: bool,
+
+    /// Be quiet, only report errors
+    #[arg(short = 'q', long)]
+    quiet: bool,
+
+    /// Don't refresh the index after reset
+    #[arg(short = 'N', long)]
+    no_refresh: bool,
+
+    /// Interactively select hunks to reset (stub)
+    #[arg(short = 'p', long)]
+    patch: bool,
+
     /// Commit to reset to, or paths to unstage
     #[arg(trailing_var_arg = true)]
     args: Vec<String>,

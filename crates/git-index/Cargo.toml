@@ -12,6 +12,7 @@ git-utils = { workspace = true }
 git-hash = { workspace = true }
 git-object = { workspace = true }
 git-odb = { workspace = true }
+git-config = { workspace = true }
 bstr = { workspace = true }
 thiserror = { workspace = true }
 memmap2 = { workspace = true }

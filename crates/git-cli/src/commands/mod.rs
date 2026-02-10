@@ -72,6 +72,29 @@ pub mod verify_tag;
 pub mod worktree;
 pub mod write_tree;
 
+// === Spec 026: Git parity phase 3 ===
+pub mod apply;
+pub mod cherry;
+pub mod count_objects;
+pub mod diff_files;
+pub mod diff_index;
+pub mod diff_tree;
+pub mod difftool;
+pub mod fmt_merge_msg;
+pub mod ls_remote;
+pub mod maintenance;
+pub mod merge_base;
+pub mod merge_file;
+pub mod merge_tree;
+pub mod name_rev;
+pub mod range_diff;
+pub mod read_tree;
+pub mod request_pull;
+pub mod rerere;
+pub mod sparse_checkout;
+pub mod stripspace;
+pub mod whatchanged;
+
 use anyhow::Result;
 use clap::Subcommand;
 
@@ -229,6 +252,153 @@ pub enum Commands {
     // === Spec 022: Performance optimization ===
     /// Write and verify commit-graph files
     CommitGraph(commit_graph::CommitGraphArgs),
+
+    // === Spec 026: Git parity phase 3 ===
+    /// Apply a patch to files and/or to the index
+    Apply(apply::ApplyArgs),
+    /// Find commits yet to be applied to upstream
+    Cherry(cherry::CherryArgs),
+    /// Count unpacked number of objects and their disk consumption
+    CountObjects(count_objects::CountObjectsArgs),
+    /// Compare files in the working tree and the index
+    DiffFiles(diff_files::DiffFilesArgs),
+    /// Compare a tree to the working tree or index
+    DiffIndex(diff_index::DiffIndexArgs),
+    /// Compares the content and mode of blobs found via two tree objects
+    DiffTree(diff_tree::DiffTreeArgs),
+    /// Show changes using common diff tools
+    Difftool(difftool::DifftoolArgs),
+    /// Produce a merge commit message
+    FmtMergeMsg(fmt_merge_msg::FmtMergeMsgArgs),
+    /// List references in a remote repository
+    LsRemote(ls_remote::LsRemoteArgs),
+    /// Run maintenance tasks to optimize repository data
+    Maintenance(maintenance::MaintenanceArgs),
+    /// Find as good common ancestors as possible for a merge
+    MergeBase(merge_base::MergeBaseArgs),
+    /// Run a three-way file merge
+    MergeFile(merge_file::MergeFileArgs),
+    /// Perform merge without touching index or working tree
+    MergeTree(merge_tree::MergeTreeArgs),
+    /// Find symbolic names for given revs
+    NameRev(name_rev::NameRevArgs),
+    /// Compare two commit ranges
+    RangeDiff(range_diff::RangeDiffArgs),
+    /// Read tree information into the index
+    ReadTree(read_tree::ReadTreeArgs),
+    /// Generate a request to pull changes into an upstream project
+    RequestPull(request_pull::RequestPullArgs),
+    /// Reuse recorded resolution of conflicted merges
+    Rerere(rerere::RerereArgs),
+    /// Initialize and modify the sparse-checkout
+    SparseCheckout(sparse_checkout::SparseCheckoutArgs),
+    /// Remove unnecessary whitespace
+    Stripspace(stripspace::StripspaceArgs),
+    /// Show logs with difference each commit introduces
+    Whatchanged(whatchanged::WhatchangedArgs),
+}
+
+impl Commands {
+    /// Get the command name as used in config keys (e.g., "log", "diff").
+    pub fn command_name(&self) -> &str {
+        match self {
+            Commands::CatFile(_) => "cat-file",
+            Commands::HashObject(_) => "hash-object",
+            Commands::RevParse(_) => "rev-parse",
+            Commands::UpdateRef(_) => "update-ref",
+            Commands::ForEachRef(_) => "for-each-ref",
+            Commands::ShowRef(_) => "show-ref",
+            Commands::SymbolicRef(_) => "symbolic-ref",
+            Commands::LsFiles(_) => "ls-files",
+            Commands::LsTree(_) => "ls-tree",
+            Commands::UpdateIndex(_) => "update-index",
+            Commands::CheckIgnore(_) => "check-ignore",
+            Commands::CheckAttr(_) => "check-attr",
+            Commands::Mktree(_) => "mktree",
+            Commands::Mktag(_) => "mktag",
+            Commands::Commit(_) => "commit",
+            Commands::CommitTree(_) => "commit-tree",
+            Commands::VerifyPack(_) => "verify-pack",
+            Commands::CheckRefFormat(_) => "check-ref-format",
+            Commands::Var(_) => "var",
+            Commands::WriteTree(_) => "write-tree",
+            Commands::Init(_) => "init",
+            Commands::Clone(_) => "clone",
+            Commands::Config(_) => "config",
+            Commands::Add(_) => "add",
+            Commands::Rm(_) => "rm",
+            Commands::Mv(_) => "mv",
+            Commands::Status(_) => "status",
+            Commands::Restore(_) => "restore",
+            Commands::Branch(_) => "branch",
+            Commands::Switch(_) => "switch",
+            Commands::Checkout(_) => "checkout",
+            Commands::Merge(_) => "merge",
+            Commands::Remote(_) => "remote",
+            Commands::Fetch(_) => "fetch",
+            Commands::Pull(_) => "pull",
+            Commands::Push(_) => "push",
+            Commands::Reset(_) => "reset",
+            Commands::Tag(_) => "tag",
+            Commands::Stash(_) => "stash",
+            Commands::Clean(_) => "clean",
+            Commands::Rebase(_) => "rebase",
+            Commands::Log(_) => "log",
+            Commands::RevList(_) => "rev-list",
+            Commands::Show(_) => "show",
+            Commands::Diff(_) => "diff",
+            Commands::Blame(_) => "blame",
+            Commands::Bisect(_) => "bisect",
+            Commands::Shortlog(_) => "shortlog",
+            Commands::Describe(_) => "describe",
+            Commands::Grep(_) => "grep",
+            Commands::CherryPick(_) => "cherry-pick",
+            Commands::Revert(_) => "revert",
+            Commands::Reflog(_) => "reflog",
+            Commands::FormatPatch(_) => "format-patch",
+            Commands::Am(_) => "am",
+            Commands::Gc(_) => "gc",
+            Commands::Repack(_) => "repack",
+            Commands::Prune(_) => "prune",
+            Commands::Fsck(_) => "fsck",
+            Commands::PackObjects(_) => "pack-objects",
+            Commands::IndexPack(_) => "index-pack",
+            Commands::Submodule(_) => "submodule",
+            Commands::Worktree(_) => "worktree",
+            Commands::Notes(_) => "notes",
+            Commands::Replace(_) => "replace",
+            Commands::Archive(_) => "archive",
+            Commands::VerifyCommit(_) => "verify-commit",
+            Commands::VerifyTag(_) => "verify-tag",
+            Commands::Credential(_) => "credential",
+            Commands::FastImport(_) => "fast-import",
+            Commands::Bundle(_) => "bundle",
+            Commands::Daemon(_) => "daemon",
+            Commands::CommitGraph(_) => "commit-graph",
+            // Spec 026
+            Commands::Apply(_) => "apply",
+            Commands::Cherry(_) => "cherry",
+            Commands::CountObjects(_) => "count-objects",
+            Commands::DiffFiles(_) => "diff-files",
+            Commands::DiffIndex(_) => "diff-index",
+            Commands::DiffTree(_) => "diff-tree",
+            Commands::Difftool(_) => "difftool",
+            Commands::FmtMergeMsg(_) => "fmt-merge-msg",
+            Commands::LsRemote(_) => "ls-remote",
+            Commands::Maintenance(_) => "maintenance",
+            Commands::MergeBase(_) => "merge-base",
+            Commands::MergeFile(_) => "merge-file",
+            Commands::MergeTree(_) => "merge-tree",
+            Commands::NameRev(_) => "name-rev",
+            Commands::RangeDiff(_) => "range-diff",
+            Commands::ReadTree(_) => "read-tree",
+            Commands::RequestPull(_) => "request-pull",
+            Commands::Rerere(_) => "rerere",
+            Commands::SparseCheckout(_) => "sparse-checkout",
+            Commands::Stripspace(_) => "stripspace",
+            Commands::Whatchanged(_) => "whatchanged",
+        }
+    }
 }
 
 /// Open a repository, respecting --git-dir override.
@@ -318,5 +488,27 @@ pub fn run(cli: Cli) -> Result<i32> {
         Commands::Daemon(args) => daemon::run(args, &cli),
         // Spec 022: Performance optimization
         Commands::CommitGraph(args) => commit_graph::run(args, &cli),
+        // Spec 026: Git parity phase 3
+        Commands::Apply(args) => apply::run(args, &cli),
+        Commands::Cherry(args) => cherry::run(args, &cli),
+        Commands::CountObjects(args) => count_objects::run(args, &cli),
+        Commands::DiffFiles(args) => diff_files::run(args, &cli),
+        Commands::DiffIndex(args) => diff_index::run(args, &cli),
+        Commands::DiffTree(args) => diff_tree::run(args, &cli),
+        Commands::Difftool(args) => difftool::run(args, &cli),
+        Commands::FmtMergeMsg(args) => fmt_merge_msg::run(args, &cli),
+        Commands::LsRemote(args) => ls_remote::run(args, &cli),
+        Commands::Maintenance(args) => maintenance::run(args, &cli),
+        Commands::MergeBase(args) => merge_base::run(args, &cli),
+        Commands::MergeFile(args) => merge_file::run(args, &cli),
+        Commands::MergeTree(args) => merge_tree::run(args, &cli),
+        Commands::NameRev(args) => name_rev::run(args, &cli),
+        Commands::RangeDiff(args) => range_diff::run(args, &cli),
+        Commands::ReadTree(args) => read_tree::run(args, &cli),
+        Commands::RequestPull(args) => request_pull::run(args, &cli),
+        Commands::Rerere(args) => rerere::run(args, &cli),
+        Commands::SparseCheckout(args) => sparse_checkout::run(args, &cli),
+        Commands::Stripspace(args) => stripspace::run(args, &cli),
+        Commands::Whatchanged(args) => whatchanged::run(args, &cli),
     }
 }

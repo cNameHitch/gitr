@@ -17,6 +17,6 @@ git-repository = { workspace = true }
 bstr = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true }
-
-[dev-dependencies]
+regex = { workspace = true }
+git-config = { workspace = true }
 tempfile = { workspace = true }

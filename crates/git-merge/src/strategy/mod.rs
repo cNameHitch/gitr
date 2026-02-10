@@ -3,6 +3,7 @@
 //! Provides the [`MergeStrategy`] trait and implementations for ORT (default),
 //! ours, and subtree strategies.
 
+pub mod octopus;
 pub mod ort;
 pub mod ours;
 pub mod subtree;
@@ -53,6 +54,10 @@ pub fn dispatch_merge(
         }
         MergeStrategyType::Subtree => {
             let strategy = subtree::SubtreeStrategy;
+            strategy.merge(repo, ours, theirs, base, options)
+        }
+        MergeStrategyType::Octopus => {
+            let strategy = octopus::OctopusStrategy;
             strategy.merge(repo, ours, theirs, base, options)
         }
     }
