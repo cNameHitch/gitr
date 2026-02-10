@@ -32,10 +32,18 @@ impl MergeStrategy for OrtStrategy {
         base_commit: &ObjectId,
         options: &MergeOptions,
     ) -> Result<MergeResult, MergeError> {
+        // Handle null base commit (unrelated histories) by writing an empty tree.
+        // We must do this before borrowing odb immutably for the rest of the merge.
+        let base_tree_id = if base_commit.is_null() {
+            let empty_tree = Tree { entries: vec![] };
+            repo.odb().write(&Object::Tree(empty_tree))?
+        } else {
+            read_commit_tree(repo.odb(), base_commit)?
+        };
+
         let odb = repo.odb();
 
-        // Read the three commits and extract their tree OIDs.
-        let base_tree_id = read_commit_tree(odb, base_commit)?;
+        // Read the two commit trees.
         let ours_tree_id = read_commit_tree(odb, ours_commit)?;
         let theirs_tree_id = read_commit_tree(odb, theirs_commit)?;
 

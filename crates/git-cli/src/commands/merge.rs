@@ -94,9 +94,9 @@ pub struct MergeArgs {
     #[arg(long)]
     pub no_verify: bool,
 
-    /// Branch or commit to merge
+    /// Branch(es) or commit(s) to merge
     #[arg(required_unless_present_any = ["abort", "continue"])]
-    pub commit: Option<String>,
+    pub commit: Vec<String>,
 }
 
 pub fn run(args: &MergeArgs, cli: &Cli) -> Result<i32> {
@@ -128,12 +128,23 @@ pub fn run(args: &MergeArgs, cli: &Cli) -> Result<i32> {
         .head_oid()?
         .ok_or_else(|| anyhow::anyhow!("cannot merge into an unborn branch"))?;
 
-    // Resolve the merge target
-    let commit_spec = args
-        .commit
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("no commit specified to merge"))?;
-    let theirs_oid = resolve_revision(&repo, commit_spec)?;
+    // Resolve all merge targets
+    if args.commit.is_empty() {
+        bail!("no commit specified to merge");
+    }
+
+    let mut theirs_oids = Vec::new();
+    for spec in &args.commit {
+        theirs_oids.push(resolve_revision(&repo, spec)?);
+    }
+
+    // Multi-head merge path (octopus)
+    if theirs_oids.len() >= 2 {
+        return run_octopus_merge(args, &mut repo, &head_oid, &theirs_oids, &mut out, &mut err);
+    }
+
+    // Single-commit merge path
+    let theirs_oid = theirs_oids[0];
 
     // Already up to date?
     if head_oid == theirs_oid {
@@ -153,11 +164,7 @@ pub fn run(args: &MergeArgs, cli: &Cli) -> Result<i32> {
     }
 
     // Determine target label for messages
-    let hex = theirs_oid.to_hex();
-    let theirs_label = args
-        .commit
-        .as_deref()
-        .unwrap_or(&hex);
+    let theirs_label = &args.commit[0];
 
     // Check for fast-forward possibility
     let can_ff = match base_oid {
@@ -252,20 +259,20 @@ pub fn run(args: &MergeArgs, cli: &Cli) -> Result<i32> {
         if args.no_commit {
             // Write the tree and index but don't commit
             checkout_tree_to_working_from_tree(&mut repo, &tree_oid)?;
-            write_merge_head(&repo, &theirs_oid)?;
-            let msg = build_merge_message(args, theirs_label);
+            write_merge_head(&repo, &[theirs_oid])?;
+            let msg = build_merge_message(args, &[theirs_label.as_str()]);
             write_merge_msg(&repo, &msg)?;
             writeln!(err, "Automatic merge went well; stopped before committing as requested.")?;
             return Ok(0);
         }
 
         // Create merge commit
-        let msg = build_merge_message(args, theirs_label);
+        let msg = build_merge_message(args, &[theirs_label.as_str()]);
+        let parents = vec![head_oid, theirs_oid];
         let commit_oid = create_merge_commit(
             &repo,
             &tree_oid,
-            &head_oid,
-            &theirs_oid,
+            &parents,
             &msg,
         )?;
 
@@ -317,8 +324,8 @@ pub fn run(args: &MergeArgs, cli: &Cli) -> Result<i32> {
     write_conflict_files(&repo, &merge_result.conflicts, theirs_label)?;
 
     // Write MERGE_HEAD and MERGE_MSG for future --continue
-    write_merge_head(&repo, &theirs_oid)?;
-    let msg = build_merge_message(args, theirs_label);
+    write_merge_head(&repo, &[theirs_oid])?;
+    let msg = build_merge_message(args, &[theirs_label.as_str()]);
     write_merge_msg(&repo, &msg)?;
 
     // Report conflicts
@@ -336,6 +343,126 @@ pub fn run(args: &MergeArgs, cli: &Cli) -> Result<i32> {
     )?;
 
     Ok(1)
+}
+
+/// Handle octopus merge (2+ additional heads).
+fn run_octopus_merge(
+    args: &MergeArgs,
+    repo: &mut git_repository::Repository,
+    head_oid: &ObjectId,
+    theirs_oids: &[ObjectId],
+    _out: &mut impl Write,
+    err: &mut impl Write,
+) -> Result<i32> {
+    if args.ff_only {
+        writeln!(err, "fatal: Not possible to fast-forward, aborting.")?;
+        return Ok(128);
+    }
+
+    save_orig_head(repo, head_oid)?;
+
+    let mut options = build_merge_options(args, repo)?;
+    // Force octopus strategy for multi-head merges
+    options.strategy = MergeStrategyType::Octopus;
+
+    // Like git, if the first branch can be fast-forwarded (i.e., HEAD is an
+    // ancestor of branch1), fast-forward to it first. This avoids an extra
+    // parent in the resulting commit.
+    let mut current_oid = *head_oid;
+    let mut merge_parents: Vec<ObjectId> = Vec::new();
+    let mut remaining_heads: Vec<ObjectId> = Vec::new();
+
+    for (i, theirs) in theirs_oids.iter().enumerate() {
+        if i == 0 {
+            let base = merge_base_one(repo, &current_oid, theirs)?;
+            let can_ff = match base {
+                Some(ref b) => *b == current_oid,
+                None => false,
+            };
+            if can_ff {
+                // Fast-forward to first branch — it becomes the first parent
+                current_oid = *theirs;
+                merge_parents.push(*theirs);
+            } else {
+                merge_parents.push(current_oid);
+                remaining_heads.push(*theirs);
+            }
+        } else {
+            remaining_heads.push(*theirs);
+        }
+    }
+
+    if remaining_heads.is_empty() {
+        // All branches were fast-forwarded (shouldn't happen with 2+ heads, but handle it)
+        let tree_oid = {
+            let obj = repo.odb().read(&current_oid)?
+                .ok_or_else(|| anyhow::anyhow!("commit not found"))?;
+            match obj {
+                Object::Commit(c) => c.tree,
+                _ => bail!("expected commit"),
+            }
+        };
+        checkout_tree_to_working_from_tree(repo, &tree_oid)?;
+        update_head_to(repo, &current_oid)?;
+        return Ok(0);
+    }
+
+    // Compute merge bases for remaining heads
+    let mut bases = Vec::new();
+    for theirs in &remaining_heads {
+        match merge_base_one(repo, &current_oid, theirs)? {
+            Some(b) => bases.push(b),
+            None => bases.push(ObjectId::NULL_SHA1),
+        }
+    }
+
+    let octopus = git_merge::strategy::octopus::OctopusStrategy;
+    let merge_result = match octopus.merge_multi(repo, &current_oid, &remaining_heads, &bases, &options) {
+        Ok(r) => r,
+        Err(e) => {
+            writeln!(err, "Merge with strategy octopus failed.")?;
+            writeln!(err, "{}", e)?;
+            return Ok(2);
+        }
+    };
+
+    let tree_oid = merge_result
+        .tree
+        .ok_or_else(|| anyhow::anyhow!("octopus merge produced no tree"))?;
+
+    // Build merge commit message
+    let labels: Vec<&str> = args.commit.iter().map(|s| s.as_str()).collect();
+    let msg = build_merge_message(args, &labels);
+
+    // Create merge commit: parents = [first_parent] + remaining heads
+    // If we fast-forwarded, first_parent is the ff'd branch; otherwise it's the original HEAD
+    for h in &remaining_heads {
+        merge_parents.push(*h);
+    }
+    let commit_oid = create_merge_commit(repo, &tree_oid, &merge_parents, &msg)?;
+
+    // Update HEAD
+    update_head_to(repo, &commit_oid)?;
+
+    // Write reflog
+    {
+        let sig = get_signature("GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_COMMITTER_DATE", repo)?;
+        let entry = ReflogEntry {
+            old_oid: *head_oid,
+            new_oid: commit_oid,
+            identity: sig,
+            message: BString::from(format!("merge {}: Merge made by the 'octopus' strategy.", labels.join(", "))),
+        };
+        let head_ref = RefName::new(BString::from("HEAD"))?;
+        append_reflog_entry(repo.git_dir(), &head_ref, &entry)?;
+    }
+
+    // Update working tree and index
+    checkout_tree_to_working_from_tree(repo, &tree_oid)?;
+
+    writeln!(err, "Merge made by the 'octopus' strategy.")?;
+
+    Ok(0)
 }
 
 /// Build MergeOptions from CLI args and repository config.
@@ -428,9 +555,18 @@ fn handle_continue(
         }
     }
 
-    // Read MERGE_HEAD
-    let merge_head_hex = std::fs::read_to_string(&merge_head_path)?;
-    let theirs_oid = ObjectId::from_hex(merge_head_hex.trim())?;
+    // Read MERGE_HEAD (may contain multiple OIDs, one per line)
+    let merge_head_content = std::fs::read_to_string(&merge_head_path)?;
+    let mut theirs_oids = Vec::new();
+    for line in merge_head_content.lines() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            theirs_oids.push(ObjectId::from_hex(trimmed)?);
+        }
+    }
+    if theirs_oids.is_empty() {
+        bail!("MERGE_HEAD is empty");
+    }
 
     // Get current HEAD
     let head_oid = repo
@@ -447,15 +583,16 @@ fn handle_continue(
     let msg = if merge_msg_path.exists() {
         std::fs::read_to_string(&merge_msg_path)?
     } else {
-        format!("Merge commit '{}'", theirs_oid.to_hex())
+        format!("Merge commit '{}'", theirs_oids[0].to_hex())
     };
 
     // Create the merge commit
+    let mut parents = vec![head_oid];
+    parents.extend_from_slice(&theirs_oids);
     let commit_oid = create_merge_commit(
         repo,
         &tree_oid,
-        &head_oid,
-        &theirs_oid,
+        &parents,
         &msg,
     )?;
 
@@ -478,20 +615,22 @@ fn handle_continue(
 }
 
 /// Build the default merge commit message.
-fn build_merge_message(args: &MergeArgs, theirs_label: &str) -> String {
+fn build_merge_message(args: &MergeArgs, theirs_labels: &[&str]) -> String {
     if let Some(ref msg) = args.message {
         msg.clone()
+    } else if theirs_labels.len() == 1 {
+        format!("Merge branch '{}'\n", theirs_labels[0])
     } else {
-        format!("Merge branch '{}'\n", theirs_label)
+        let quoted: Vec<String> = theirs_labels.iter().map(|l| format!("'{}'", l)).collect();
+        format!("Merge branches {}\n", quoted.join(", "))
     }
 }
 
-/// Create a merge commit with two parents and write it to the ODB.
+/// Create a merge commit with N parents and write it to the ODB.
 fn create_merge_commit(
     repo: &git_repository::Repository,
     tree_oid: &ObjectId,
-    parent1: &ObjectId,
-    parent2: &ObjectId,
+    parents: &[ObjectId],
     message: &str,
 ) -> Result<ObjectId> {
     let author = get_signature(
@@ -509,7 +648,7 @@ fn create_merge_commit(
 
     let commit = Commit {
         tree: *tree_oid,
-        parents: vec![*parent1, *parent2],
+        parents: parents.to_vec(),
         author,
         committer,
         encoding: None,
@@ -550,9 +689,10 @@ fn save_orig_head(repo: &git_repository::Repository, oid: &ObjectId) -> Result<(
 }
 
 /// Write MERGE_HEAD file (used during conflict resolution).
-fn write_merge_head(repo: &git_repository::Repository, oid: &ObjectId) -> Result<()> {
+fn write_merge_head(repo: &git_repository::Repository, oids: &[ObjectId]) -> Result<()> {
     let path = repo.git_dir().join("MERGE_HEAD");
-    std::fs::write(path, format!("{}\n", oid.to_hex()))?;
+    let content: String = oids.iter().map(|o| format!("{}\n", o.to_hex())).collect();
+    std::fs::write(path, content)?;
     Ok(())
 }
 
