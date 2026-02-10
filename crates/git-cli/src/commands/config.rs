@@ -25,6 +25,14 @@ pub struct ConfigArgs {
     #[arg(long)]
     local: bool,
 
+    /// Use global config (~/.gitconfig)
+    #[arg(long)]
+    global: bool,
+
+    /// Remove a configuration entry
+    #[arg(long)]
+    unset: bool,
+
     /// Configuration key (e.g., remote.origin.url)
     key: Option<String>,
 
@@ -37,9 +45,28 @@ pub fn run(args: &ConfigArgs, cli: &Cli) -> Result<i32> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
+    // Handle --unset
+    if args.unset {
+        let key = args.key.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("error: key is required for --unset")
+        })?;
+        let scope = if args.global {
+            git_config::ConfigScope::Global
+        } else {
+            git_config::ConfigScope::Local
+        };
+        repo.config_mut().unset(key, scope)?;
+        return Ok(0);
+    }
+
     // If key and value are given, this is a set operation (must come before immutable borrows)
     if let (Some(ref key), Some(ref value)) = (&args.key, &args.value) {
-        repo.config_mut().set(key, value, git_config::ConfigScope::Local)?;
+        let scope = if args.global {
+            git_config::ConfigScope::Global
+        } else {
+            git_config::ConfigScope::Local
+        };
+        repo.config_mut().set(key, value, scope)?;
         return Ok(0);
     }
 
@@ -84,6 +111,18 @@ pub fn run(args: &ConfigArgs, cli: &Cli) -> Result<i32> {
         })?;
 
         let cwd = std::env::current_dir().ok();
+
+        if args.global {
+            // Only look in global config
+            match repo.config().get_string_from_scope(key, git_config::ConfigScope::Global) {
+                Ok(Some(value)) => {
+                    writeln!(out, "{}", value)?;
+                    return Ok(0);
+                }
+                Ok(None) => return Ok(1),
+                Err(e) => return Err(e.into()),
+            }
+        }
 
         if args.local {
             // Only look in local config

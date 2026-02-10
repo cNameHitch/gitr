@@ -149,7 +149,7 @@ pub fn run(args: &BlameArgs, cli: &Cli) -> Result<i32> {
                     } else {
                         String::from_utf8_lossy(&commit.author.name).to_string()
                     };
-                    let date = commit.author.date.format(DateFormat::Iso);
+                    let date = commit.author.date.format(&DateFormat::Iso);
                     // Show full date+time+tz: "YYYY-MM-DD HH:MM:SS <tz>"
                     let date_display = &date[..date.len().min(25)];
 

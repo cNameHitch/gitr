@@ -7,6 +7,8 @@ use git_hash::ObjectId;
 use git_index::Index;
 use git_merge::MergeOptions;
 use git_object::{Commit, Object};
+use git_ref::RefName;
+use git_ref::reflog::{ReflogEntry, append_reflog_entry};
 use git_utils::date::{GitDate, Signature};
 
 use crate::Cli;
@@ -93,14 +95,43 @@ pub fn run(args: &RebaseArgs, cli: &Cli) -> Result<i32> {
 
     // Move HEAD to onto
     super::reset::update_head(&repo, &onto_oid)?;
+    {
+        let sig = build_committer(&repo)?;
+        let entry = ReflogEntry {
+            old_oid: head_oid,
+            new_oid: onto_oid,
+            identity: sig,
+            message: BString::from(format!("rebase (start): checkout {}", onto_spec)),
+        };
+        let head_ref = RefName::new(BString::from("HEAD"))?;
+        append_reflog_entry(repo.git_dir(), &head_ref, &entry)?;
+    }
 
     // Cherry-pick each commit
+    let total = commits_to_replay.len();
     let mut current = onto_oid;
-    for commit_oid in &commits_to_replay {
+    let mut prev_oid = onto_oid;
+    for (i, commit_oid) in commits_to_replay.iter().enumerate() {
+        writeln!(err, "Rebasing ({}/{})", i + 1, total)?;
         match cherry_pick(&mut repo, &current, commit_oid)? {
             Some(new_oid) => {
                 current = new_oid;
                 super::reset::update_head(&repo, &current)?;
+                {
+                    if let Some(Object::Commit(c)) = repo.odb().read(commit_oid)? {
+                        let sig = build_committer(&repo)?;
+                        let subject = String::from_utf8_lossy(c.summary()).to_string();
+                        let entry = ReflogEntry {
+                            old_oid: prev_oid,
+                            new_oid,
+                            identity: sig,
+                            message: BString::from(format!("rebase: {}", subject)),
+                        };
+                        let head_ref = RefName::new(BString::from("HEAD"))?;
+                        append_reflog_entry(repo.git_dir(), &head_ref, &entry)?;
+                    }
+                    prev_oid = new_oid;
+                }
             }
             None => {
                 // Conflict
@@ -116,9 +147,28 @@ pub fn run(args: &RebaseArgs, cli: &Cli) -> Result<i32> {
         }
     }
 
+    // Record rebase finish in reflog
+    {
+        let sig = build_committer(&repo)?;
+        let head_name = repo.current_branch()?.unwrap_or_else(|| "HEAD".to_string());
+        let entry = ReflogEntry {
+            old_oid: onto_oid,
+            new_oid: current,
+            identity: sig,
+            message: BString::from(format!("rebase (finish): returning to refs/heads/{}", head_name)),
+        };
+        let head_ref = RefName::new(BString::from("HEAD"))?;
+        append_reflog_entry(repo.git_dir(), &head_ref, &entry)?;
+    }
+
     // Clean up
+    let head_name = std::fs::read_to_string(rebase_dir.join("head-name")).unwrap_or_default().trim().to_string();
     let _ = std::fs::remove_dir_all(&rebase_dir);
-    writeln!(err, "Successfully rebased.")?;
+    if head_name.is_empty() {
+        writeln!(err, "Successfully rebased.")?;
+    } else {
+        writeln!(err, "Successfully rebased and updated refs/heads/{}.", head_name)?;
+    }
 
     Ok(0)
 }

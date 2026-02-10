@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 
 use anyhow::Result;
+use bstr::ByteSlice;
 use clap::Args;
 use git_diff::format::format_diff;
 use git_diff::{DiffOptions, DiffOutputFormat};
@@ -12,6 +13,7 @@ use git_revwalk::{
     format_builtin_with_decorations, format_commit_with_decorations, BuiltinFormat, FormatOptions,
     GraphDrawer, RevWalk, SortOrder, WalkOptions,
 };
+use git_utils::date::DateFormat;
 use super::open_repo;
 use crate::Cli;
 
@@ -40,6 +42,10 @@ pub struct LogArgs {
     /// Limit commits to those with log message matching pattern
     #[arg(long)]
     grep: Option<String>,
+
+    /// Format date output (iso, relative, short, default, format:<strftime>)
+    #[arg(long)]
+    date: Option<String>,
 
     /// Show one-line summary per commit
     #[arg(long)]
@@ -81,6 +87,14 @@ pub struct LogArgs {
     #[arg(long)]
     first_parent: bool,
 
+    /// Show only merge commits (commits with more than one parent)
+    #[arg(long)]
+    merges: bool,
+
+    /// Skip merge commits (commits with more than one parent)
+    #[arg(long)]
+    no_merges: bool,
+
     /// Show name-only diff
     #[arg(long)]
     name_only: bool,
@@ -92,6 +106,10 @@ pub struct LogArgs {
     /// Revision range or starting point
     #[arg(value_name = "revision")]
     revisions: Vec<String>,
+
+    /// Limit to commits touching these paths (after --)
+    #[arg(last = true, value_name = "path")]
+    path_args: Vec<String>,
 }
 
 pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
@@ -105,6 +123,10 @@ pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
     // --oneline is shorthand for --format=oneline --abbrev-commit
     if args.oneline {
         format_options.abbrev_len = 7;
+    }
+    // Apply --date format
+    if let Some(ref date_str) = args.date {
+        format_options.date_format = parse_date_format(date_str);
     }
 
     // Build walk options
@@ -131,9 +153,9 @@ pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
     let mut walker = RevWalk::new(&repo)?;
     walker.set_options(walk_opts);
 
-    // Parse pathspec from revisions (anything after --)
+    // Parse pathspec: use path_args (after --) plus any remaining from revisions after --
     let mut revs = Vec::new();
-    let mut _pathspecs: Vec<String> = Vec::new();
+    let mut pathspecs: Vec<String> = args.path_args.clone();
     let mut saw_separator = false;
     for arg in &args.revisions {
         if arg == "--" {
@@ -141,7 +163,7 @@ pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
             continue;
         }
         if saw_separator {
-            _pathspecs.push(arg.clone());
+            pathspecs.push(arg.clone());
         } else {
             revs.push(arg.clone());
         }
@@ -208,6 +230,39 @@ pub fn run(args: &LogArgs, cli: &Cli) -> Result<i32> {
             Object::Commit(c) => c,
             _ => continue,
         };
+
+        // Filter by merge status
+        if args.merges && commit.parents.len() < 2 {
+            continue;
+        }
+        if args.no_merges && commit.parents.len() > 1 {
+            continue;
+        }
+
+        // Filter by pathspec: skip commits that don't touch any of the given paths
+        if !pathspecs.is_empty() {
+            let parent_tree = commit.first_parent().and_then(|p| {
+                repo.odb().read(p).ok().flatten().and_then(|o| match o {
+                    Object::Commit(c) => Some(c.tree),
+                    _ => None,
+                })
+            });
+            let diff_opts = DiffOptions::default();
+            if let Ok(result) = git_diff::tree::diff_trees(
+                repo.odb(),
+                parent_tree.as_ref(),
+                Some(&commit.tree),
+                &diff_opts,
+            ) {
+                let touches_path = result.files.iter().any(|f| {
+                    let path = f.path().to_str_lossy();
+                    pathspecs.iter().any(|ps| path.starts_with(ps.as_str()))
+                });
+                if !touches_path {
+                    continue;
+                }
+            }
+        }
 
         // Format the commit
         let formatted = if let Some(ref fmt) = custom_format {
@@ -368,6 +423,28 @@ fn parse_format(args: &LogArgs) -> (BuiltinFormat, Option<String>) {
             (BuiltinFormat::Medium, Some(fmt.to_string()))
         }
         None => (BuiltinFormat::Medium, None),
+    }
+}
+
+fn parse_date_format(s: &str) -> DateFormat {
+    match s {
+        "iso" | "iso8601" => DateFormat::Iso,
+        "iso-strict" | "iso8601-strict" => DateFormat::IsoStrict,
+        "relative" => DateFormat::Relative,
+        "short" => DateFormat::Short,
+        "default" => DateFormat::Default,
+        "raw" => DateFormat::Raw,
+        "unix" => DateFormat::Unix,
+        "rfc" | "rfc2822" => DateFormat::Rfc2822,
+        "local" => DateFormat::Local,
+        "human" => DateFormat::Human,
+        other => {
+            if let Some(strftime) = other.strip_prefix("format:") {
+                DateFormat::Custom(strftime.to_string())
+            } else {
+                DateFormat::Default
+            }
+        }
     }
 }
 

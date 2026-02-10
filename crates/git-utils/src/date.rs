@@ -14,7 +14,7 @@ pub struct GitDate {
 }
 
 /// Supported date output formats matching C git's `date_mode_type`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DateFormat {
     /// "2 hours ago"
     Relative,
@@ -36,6 +36,8 @@ pub enum DateFormat {
     Unix,
     /// C git default: "Thu Feb 13 23:31:30 2009 +0000" using commit's stored tz_offset
     Default,
+    /// Custom strftime format string (e.g., "%Y-%m-%d %H:%M:%S")
+    Custom(String),
 }
 
 /// Git timezone offset stored as integer (e.g. -0500 for EST = -500 integer).
@@ -94,11 +96,11 @@ impl GitDate {
 
         // Try "@timestamp" format
         if let Some(ts_str) = input.strip_prefix('@') {
-            return Self::parse_raw(ts_str);
+            return Self::parse_raw_strict(ts_str);
         }
 
         // Try raw git format: "timestamp +/-offset"
-        if let Ok(date) = Self::parse_raw(input) {
+        if let Ok(date) = Self::parse_raw_strict(input) {
             return Ok(date);
         }
 
@@ -154,7 +156,20 @@ impl GitDate {
     }
 
     /// Parse raw git format: "timestamp +/-offset" or just "timestamp".
+    ///
+    /// Falls back to `GitDate::parse()` if the input doesn't look like a raw
+    /// timestamp, so that ISO 8601 strings from env vars like
+    /// `GIT_AUTHOR_DATE` / `GIT_COMMITTER_DATE` are accepted.
     pub fn parse_raw(input: &str) -> Result<Self> {
+        match Self::parse_raw_strict(input) {
+            Ok(date) => Ok(date),
+            Err(_) => Self::parse(input),
+        }
+    }
+
+    /// Strictly parse raw git format: "timestamp +/-offset" or just "timestamp".
+    /// Does not fall back to other formats.
+    fn parse_raw_strict(input: &str) -> Result<Self> {
         let input = input.trim();
 
         let parts: Vec<&str> = input.splitn(2, ' ').collect();
@@ -244,7 +259,7 @@ impl GitDate {
     }
 
     /// Format in the given style.
-    pub fn format(&self, fmt: DateFormat) -> String {
+    pub fn format(&self, fmt: &DateFormat) -> String {
         match fmt {
             DateFormat::Raw => {
                 let tz = minutes_to_tz_offset(self.tz_offset);
@@ -274,6 +289,7 @@ impl GitDate {
                             .with_timezone(&Local);
                         local_dt.format("%a %b %e %H:%M:%S %Y").to_string()
                     }
+                    DateFormat::Custom(ref strftime) => dt.format(strftime).to_string(),
                     _ => unreachable!(),
                 }
             }
@@ -349,7 +365,7 @@ impl GitDate {
             self.format_relative()
         } else {
             // Use short date for older dates
-            self.format(DateFormat::Iso)
+            self.format(&DateFormat::Iso)
         }
     }
 
@@ -479,44 +495,44 @@ mod tests {
     #[test]
     fn format_raw() {
         let d = GitDate::new(1234567890, 0);
-        assert_eq!(d.format(DateFormat::Raw), "1234567890 +0000");
+        assert_eq!(d.format(&DateFormat::Raw), "1234567890 +0000");
     }
 
     #[test]
     fn format_raw_negative_tz() {
         let d = GitDate::new(1234567890, -300);
-        assert_eq!(d.format(DateFormat::Raw), "1234567890 -0500");
+        assert_eq!(d.format(&DateFormat::Raw), "1234567890 -0500");
     }
 
     #[test]
     fn format_unix() {
         let d = GitDate::new(1234567890, 0);
-        assert_eq!(d.format(DateFormat::Unix), "1234567890");
+        assert_eq!(d.format(&DateFormat::Unix), "1234567890");
     }
 
     #[test]
     fn format_short() {
         let d = GitDate::new(1736942400, 0);
-        assert_eq!(d.format(DateFormat::Short), "2025-01-15");
+        assert_eq!(d.format(&DateFormat::Short), "2025-01-15");
     }
 
     #[test]
     fn format_iso() {
         let d = GitDate::new(1736942400, 0);
-        assert_eq!(d.format(DateFormat::Iso), "2025-01-15 12:00:00 +0000");
+        assert_eq!(d.format(&DateFormat::Iso), "2025-01-15 12:00:00 +0000");
     }
 
     #[test]
     fn format_iso_strict() {
         let d = GitDate::new(1736942400, 0);
-        assert_eq!(d.format(DateFormat::IsoStrict), "2025-01-15T12:00:00+00:00");
+        assert_eq!(d.format(&DateFormat::IsoStrict), "2025-01-15T12:00:00+00:00");
     }
 
     #[test]
     fn format_rfc2822() {
         let d = GitDate::new(1736942400, 0);
         assert_eq!(
-            d.format(DateFormat::Rfc2822),
+            d.format(&DateFormat::Rfc2822),
             "Wed, 15 Jan 2025 12:00:00 +0000"
         );
     }

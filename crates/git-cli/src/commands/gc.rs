@@ -79,22 +79,13 @@ pub fn run(args: &GcArgs, cli: &Cli) -> Result<i32> {
     // Ensure we clean up the lock file
     let _cleanup = GcCleanup { path: gc_pid_path.clone() };
 
-    // Step 1: Pack refs
-    if !args.quiet {
-        writeln!(err, "Packing refs...")?;
-    }
+    // Step 1: Pack refs (silent by default, matching git behavior)
     pack_refs(&repo)?;
 
     // Step 2: Reflog expire
-    if !args.quiet {
-        writeln!(err, "Expiring reflogs...")?;
-    }
     expire_reflogs(&repo)?;
 
     // Step 3: Repack
-    if !args.quiet {
-        writeln!(err, "Repacking...")?;
-    }
 
     let mut repack_args = vec!["-a".to_string(), "-d".to_string()];
     if args.quiet {
@@ -107,13 +98,14 @@ pub fn run(args: &GcArgs, cli: &Cli) -> Result<i32> {
     }
 
     // Use our own repack logic instead of shelling out
+    // gc is silent by default (matching git behavior), so always suppress sub-command output
     let repack_cli_args = super::repack::RepackArgs {
         all: true,
         all_loosen: false,
         delete: true,
         force: args.aggressive,
         force_objects: false,
-        quiet: args.quiet,
+        quiet: true,
         local: false,
         write_bitmap_hashcache: false,
         window: if args.aggressive { Some(250) } else { None },
@@ -130,14 +122,10 @@ pub fn run(args: &GcArgs, cli: &Cli) -> Result<i32> {
         None => "2.weeks.ago".to_string(),
     };
 
-    if !args.quiet {
-        writeln!(err, "Pruning...")?;
-    }
-
     let prune_cli_args = super::prune::PruneArgs {
         dry_run: false,
         verbose: false,
-        progress: !args.quiet,
+        progress: false,
         expire: prune_expire,
         heads: Vec::new(),
     };

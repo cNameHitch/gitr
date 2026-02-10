@@ -64,6 +64,10 @@ pub struct DiffArgs {
     #[arg(long)]
     find_copies: bool,
 
+    /// Show word-level diff using [-removed-]{+added+} markers
+    #[arg(long)]
+    word_diff: bool,
+
     /// Commits or paths to diff
     #[arg(value_name = "commit-or-path")]
     args: Vec<String>,
@@ -213,6 +217,8 @@ fn determine_output_format(args: &DiffArgs) -> DiffOutputFormat {
         DiffOutputFormat::Summary
     } else if args.raw {
         DiffOutputFormat::Raw
+    } else if args.word_diff {
+        DiffOutputFormat::WordDiff
     } else {
         DiffOutputFormat::Unified
     }

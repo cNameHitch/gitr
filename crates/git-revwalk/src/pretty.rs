@@ -170,34 +170,34 @@ pub fn format_commit_with_decorations(
                         }
                         Some('d') => {
                             chars.next();
-                            result.push_str(&commit.author.date.format(options.date_format));
+                            result.push_str(&commit.author.date.format(&options.date_format));
                         }
                         Some('D') => {
                             chars.next();
                             result.push_str(
-                                &commit.author.date.format(DateFormat::Rfc2822),
+                                &commit.author.date.format(&DateFormat::Rfc2822),
                             );
                         }
                         Some('I') => {
                             chars.next();
                             result.push_str(
-                                &commit.author.date.format(DateFormat::IsoStrict),
+                                &commit.author.date.format(&DateFormat::IsoStrict),
                             );
                         }
                         Some('i') => {
                             chars.next();
-                            result.push_str(&commit.author.date.format(DateFormat::Iso));
+                            result.push_str(&commit.author.date.format(&DateFormat::Iso));
                         }
                         Some('t') => {
                             chars.next();
                             result.push_str(
-                                &commit.author.date.format(DateFormat::Unix),
+                                &commit.author.date.format(&DateFormat::Unix),
                             );
                         }
                         Some('r') => {
                             chars.next();
                             result.push_str(
-                                &commit.author.date.format(DateFormat::Relative),
+                                &commit.author.date.format(&DateFormat::Relative),
                             );
                         }
                         _ => {
@@ -219,34 +219,34 @@ pub fn format_commit_with_decorations(
                         Some('d') => {
                             chars.next();
                             result
-                                .push_str(&commit.committer.date.format(options.date_format));
+                                .push_str(&commit.committer.date.format(&options.date_format));
                         }
                         Some('D') => {
                             chars.next();
                             result.push_str(
-                                &commit.committer.date.format(DateFormat::Rfc2822),
+                                &commit.committer.date.format(&DateFormat::Rfc2822),
                             );
                         }
                         Some('I') => {
                             chars.next();
                             result.push_str(
-                                &commit.committer.date.format(DateFormat::IsoStrict),
+                                &commit.committer.date.format(&DateFormat::IsoStrict),
                             );
                         }
                         Some('i') => {
                             chars.next();
-                            result.push_str(&commit.committer.date.format(DateFormat::Iso));
+                            result.push_str(&commit.committer.date.format(&DateFormat::Iso));
                         }
                         Some('t') => {
                             chars.next();
                             result.push_str(
-                                &commit.committer.date.format(DateFormat::Unix),
+                                &commit.committer.date.format(&DateFormat::Unix),
                             );
                         }
                         Some('r') => {
                             chars.next();
                             result.push_str(
-                                &commit.committer.date.format(DateFormat::Relative),
+                                &commit.committer.date.format(&DateFormat::Relative),
                             );
                         }
                         _ => {
@@ -346,7 +346,7 @@ pub fn format_builtin_with_decorations(
             ));
             out.push_str(&format!(
                 "Date:   {}\n",
-                commit.author.date.format(options.date_format)
+                commit.author.date.format(&options.date_format)
             ));
             out.push('\n');
             // Indent each line of message with 4 spaces.
@@ -377,6 +377,17 @@ pub fn format_builtin_with_decorations(
         BuiltinFormat::Fuller => {
             let mut out = String::new();
             out.push_str(&format!("commit {}\n", oid.to_hex()));
+            if commit.parents.len() > 1 {
+                let abbrevs: Vec<String> = commit
+                    .parents
+                    .iter()
+                    .map(|p| {
+                        let hex = p.to_hex();
+                        hex[..options.abbrev_len.min(hex.len())].to_string()
+                    })
+                    .collect();
+                out.push_str(&format!("Merge:      {}\n", abbrevs.join(" ")));
+            }
             out.push_str(&format!(
                 "Author:     {} <{}>\n",
                 String::from_utf8_lossy(&commit.author.name),
@@ -384,7 +395,7 @@ pub fn format_builtin_with_decorations(
             ));
             out.push_str(&format!(
                 "AuthorDate: {}\n",
-                commit.author.date.format(options.date_format)
+                commit.author.date.format(&options.date_format)
             ));
             out.push_str(&format!(
                 "Commit:     {} <{}>\n",
@@ -393,7 +404,7 @@ pub fn format_builtin_with_decorations(
             ));
             out.push_str(&format!(
                 "CommitDate: {}\n",
-                commit.committer.date.format(options.date_format)
+                commit.committer.date.format(&options.date_format)
             ));
             out.push('\n');
             for line in commit.message.lines() {
@@ -414,7 +425,7 @@ pub fn format_builtin_with_decorations(
             ));
             out.push_str(&format!(
                 "Date: {}\n",
-                commit.author.date.format(DateFormat::Rfc2822)
+                commit.author.date.format(&DateFormat::Rfc2822)
             ));
             out.push_str(&format!(
                 "Subject: [PATCH] {}\n",

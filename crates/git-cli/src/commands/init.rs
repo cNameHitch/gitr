@@ -63,8 +63,12 @@ pub fn run(args: &InitArgs, _cli: &Cli) -> Result<i32> {
     if !args.quiet {
         let stderr = io::stderr();
         let mut err = stderr.lock();
-        let git_dir = repo.git_dir();
-        writeln!(err, "Initialized empty Git repository in {}", git_dir.display())?;
+        let git_dir = std::fs::canonicalize(repo.git_dir()).unwrap_or_else(|_| repo.git_dir().to_path_buf());
+        let mut display_path = git_dir.display().to_string();
+        if !display_path.ends_with('/') {
+            display_path.push('/');
+        }
+        writeln!(err, "Initialized empty Git repository in {}", display_path)?;
     }
 
     Ok(0)

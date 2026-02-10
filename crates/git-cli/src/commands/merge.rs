@@ -9,6 +9,7 @@ use git_index::{EntryFlags, Index, IndexEntry, Stage, StatData};
 use git_merge::{MergeOptions, ConflictEntry};
 use git_object::{Commit, FileMode, Object};
 use git_ref::{RefName, RefStore};
+use git_ref::reflog::{ReflogEntry, append_reflog_entry};
 use git_revwalk::{merge_base_one, resolve_revision};
 use git_utils::date::{GitDate, Signature};
 
@@ -40,6 +41,10 @@ pub struct MergeArgs {
     /// Perform the merge but don't create a commit
     #[arg(long = "no-commit")]
     pub no_commit: bool,
+
+    /// Use the auto-generated message without launching an editor
+    #[arg(long)]
+    pub no_edit: bool,
 
     /// Merge commit message
     #[arg(short = 'm')]
@@ -137,8 +142,24 @@ pub fn run(args: &MergeArgs, cli: &Cli) -> Result<i32> {
         )?;
         writeln!(err, "Fast-forward")?;
 
+        // Show diffstat
+        print_merge_diffstat(repo.odb(), &head_oid, &theirs_oid, &mut err)?;
+
         // Update HEAD ref
         update_head_to(&repo, &theirs_oid)?;
+
+        // Write reflog entry for HEAD
+        {
+            let sig = get_signature("GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_COMMITTER_DATE", &repo)?;
+            let entry = ReflogEntry {
+                old_oid: head_oid,
+                new_oid: theirs_oid,
+                identity: sig,
+                message: BString::from(format!("merge {}: Fast-forward", theirs_label)),
+            };
+            let head_ref = RefName::new(BString::from("HEAD"))?;
+            append_reflog_entry(repo.git_dir(), &head_ref, &entry)?;
+        }
 
         // Update working tree and index
         checkout_tree_to_working(&mut repo, &theirs_oid)?;
@@ -207,6 +228,19 @@ pub fn run(args: &MergeArgs, cli: &Cli) -> Result<i32> {
         // Update HEAD
         update_head_to(&repo, &commit_oid)?;
 
+        // Write reflog entry for HEAD
+        {
+            let sig = get_signature("GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_COMMITTER_DATE", &repo)?;
+            let entry = ReflogEntry {
+                old_oid: head_oid,
+                new_oid: commit_oid,
+                identity: sig,
+                message: BString::from(format!("merge {}: Merge made by the 'ort' strategy.", theirs_label)),
+            };
+            let head_ref = RefName::new(BString::from("HEAD"))?;
+            append_reflog_entry(repo.git_dir(), &head_ref, &entry)?;
+        }
+
         // Update working tree and index
         checkout_tree_to_working_from_tree(&mut repo, &tree_oid)?;
 
@@ -214,6 +248,9 @@ pub fn run(args: &MergeArgs, cli: &Cli) -> Result<i32> {
             err,
             "Merge made by the 'ort' strategy."
         )?;
+
+        // Show diffstat
+        print_merge_diffstat(repo.odb(), &head_oid, &commit_oid, &mut err)?;
 
         return Ok(0);
     }
@@ -784,6 +821,34 @@ fn merge_with_markers(
     }
 
     result.into_bytes()
+}
+
+/// Print diffstat summary between two commits.
+fn print_merge_diffstat(
+    odb: &git_odb::ObjectDatabase,
+    from_oid: &ObjectId,
+    to_oid: &ObjectId,
+    out: &mut impl Write,
+) -> Result<()> {
+    let from_tree = odb.read(from_oid)?.and_then(|o| match o {
+        Object::Commit(c) => Some(c.tree),
+        _ => None,
+    });
+    let to_tree = odb.read(to_oid)?.and_then(|o| match o {
+        Object::Commit(c) => Some(c.tree),
+        _ => None,
+    });
+    let diff_opts = git_diff::DiffOptions {
+        output_format: git_diff::DiffOutputFormat::Stat,
+        ..git_diff::DiffOptions::default()
+    };
+    if let Ok(result) = git_diff::tree::diff_trees(odb, from_tree.as_ref(), to_tree.as_ref(), &diff_opts) {
+        if !result.is_empty() {
+            let output = git_diff::format::format_diff(&result, &diff_opts);
+            write!(out, "{}", output)?;
+        }
+    }
+    Ok(())
 }
 
 /// Human-readable label for a conflict type.

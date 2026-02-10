@@ -83,6 +83,7 @@ pub fn run(args: &PullArgs, cli: &Cli) -> Result<i32> {
         abort: false,
         cont: false,
         no_commit: false,
+        no_edit: false,
         message: None,
         commit: Some(merge_branch),
     };

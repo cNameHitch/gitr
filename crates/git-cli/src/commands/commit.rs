@@ -8,6 +8,7 @@ use clap::Args;
 use git_hash::ObjectId;
 use git_index::{EntryFlags, IndexEntry, Stage, StatData};
 use git_object::{Commit, FileMode, Object, ObjectType};
+use git_ref::reflog::{append_reflog_entry, ReflogEntry};
 use git_ref::{RefName, RefStore, Reference};
 use git_utils::date::{GitDate, Signature};
 
@@ -194,13 +195,33 @@ pub fn run(args: &CommitArgs, cli: &Cli) -> Result<i32> {
     let commit_oid = repo.odb().write(&obj)?;
 
     // 9. Update HEAD ref
+    let old_head_oid = repo.head_oid()?.unwrap_or(ObjectId::NULL_SHA1);
     update_head(&repo, &commit_oid)?;
+
+    // Write reflog entry for HEAD
+    {
+        let reflog_msg = if is_unborn {
+            format!("commit (initial): {}", String::from_utf8_lossy(commit.summary()))
+        } else if args.amend {
+            format!("commit (amend): {}", String::from_utf8_lossy(commit.summary()))
+        } else {
+            format!("commit: {}", String::from_utf8_lossy(commit.summary()))
+        };
+        let entry = ReflogEntry {
+            old_oid: old_head_oid,
+            new_oid: commit_oid,
+            identity: commit.committer.clone(),
+            message: BString::from(reflog_msg),
+        };
+        let head_ref = RefName::new(BString::from("HEAD"))?;
+        append_reflog_entry(repo.git_dir(), &head_ref, &entry)?;
+    }
 
     // Run post-commit hook (ignore exit code)
     let _ = run_hook(&git_dir, "post-commit", &[]);
 
     // 10. Print summary
-    print_summary(&repo, &commit, &commit_oid, is_unborn)?;
+    print_summary(&repo, &commit, &commit_oid, is_unborn, args.amend)?;
 
     Ok(0)
 }
@@ -405,6 +426,7 @@ fn print_summary(
     commit: &Commit,
     oid: &ObjectId,
     is_initial: bool,
+    is_amend: bool,
 ) -> Result<()> {
     let stderr = io::stderr();
     let mut err = stderr.lock();
@@ -427,23 +449,59 @@ fn print_summary(
     let summary = commit.summary();
     let summary_str = summary.to_str_lossy();
 
-    // Count files in the commit tree (number of entries in the index is a good proxy)
-    let index_path = repo.git_dir().join("index");
-    let file_count = if index_path.exists() {
-        let index = git_index::Index::read_from(&index_path)?;
-        index.len()
-    } else {
-        0
-    };
-
     writeln!(
         err,
         "[{} {}] {}",
         branch_name, short_sha, summary_str
     )?;
 
-    if commit.is_root() {
-        writeln!(err, " {} file(s) changed", file_count)?;
+    if is_amend {
+        writeln!(
+            err,
+            " Date: {}",
+            commit.author.date.format(&git_utils::date::DateFormat::Default)
+        )?;
+    }
+
+    // Compute diffstat: parent tree vs commit tree
+    let parent_tree = commit.first_parent().and_then(|p| {
+        repo.odb().read(p).ok().flatten().and_then(|o| match o {
+            Object::Commit(c) => Some(c.tree),
+            _ => None,
+        })
+    });
+    let diff_opts = git_diff::DiffOptions::default();
+    if let Ok(result) = git_diff::tree::diff_trees(
+        repo.odb(),
+        parent_tree.as_ref(),
+        Some(&commit.tree),
+        &diff_opts,
+    ) {
+        let mut insertions = 0usize;
+        let mut deletions = 0usize;
+        let file_count = result.files.len();
+        for file in &result.files {
+            for hunk in &file.hunks {
+                for line in &hunk.lines {
+                    match line {
+                        git_diff::DiffLine::Addition(_) => insertions += 1,
+                        git_diff::DiffLine::Deletion(_) => deletions += 1,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let mut parts = Vec::new();
+        parts.push(format!(" {} file{} changed", file_count, if file_count != 1 { "s" } else { "" }));
+        if insertions > 0 {
+            parts.push(format!("{} insertion{}", insertions, if insertions != 1 { "s(+)" } else { "(+)" }));
+        }
+        if deletions > 0 {
+            parts.push(format!("{} deletion{}", deletions, if deletions != 1 { "s(-)" } else { "(-)" }));
+        }
+        if file_count > 0 {
+            writeln!(err, "{}", parts.join(", "))?;
+        }
     }
 
     Ok(())

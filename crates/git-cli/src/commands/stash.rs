@@ -395,6 +395,33 @@ fn stash_pop(cli: &Cli, index: usize, drop: bool) -> Result<i32> {
         }
     }
 
+    // Write reflog entry for HEAD (stash apply/pop restores working state)
+    {
+        let old_head = repo.head_oid()?.unwrap_or(ObjectId::NULL_SHA1);
+        let branch = repo.current_branch()?.unwrap_or_else(|| "HEAD".to_string());
+        let sig = build_stash_signature(&repo)?;
+        let entry = ReflogEntry {
+            old_oid: old_head,
+            new_oid: old_head, // stash pop doesn't change HEAD commit
+            identity: sig,
+            message: BString::from(format!("checkout: moving from {} to {}", branch, branch)),
+        };
+        let head_ref = RefName::new(BString::from("HEAD"))?;
+        append_reflog_entry(repo.git_dir(), &head_ref, &entry)?;
+    }
+
+    // Print working tree status (matching git stash pop output)
+    {
+        let stdout = io::stdout();
+        let mut out = stdout.lock();
+        let options = git_diff::DiffOptions {
+            detect_renames: true,
+            ..git_diff::DiffOptions::default()
+        };
+        let status_args = super::status::StatusArgs::default();
+        super::status::print_status(&mut repo, &work_tree, &options, &status_args, &mut out)?;
+    }
+
     if drop {
         // Remove stash ref
         repo.refs().delete_ref(&stash_ref)?;
@@ -403,7 +430,7 @@ fn stash_pop(cli: &Cli, index: usize, drop: bool) -> Result<i32> {
         let _ = std::fs::remove_file(&reflog_path);
         let stderr = io::stderr();
         let mut err = stderr.lock();
-        writeln!(err, "Dropped refs/stash@{{0}} ({})", &stash_oid.to_hex()[..7])?;
+        writeln!(err, "Dropped refs/stash@{{0}} ({})", stash_oid.to_hex())?;
     }
 
     Ok(0)
@@ -449,7 +476,7 @@ fn stash_drop(cli: &Cli, index: usize) -> Result<i32> {
 
     let stderr = io::stderr();
     let mut err = stderr.lock();
-    writeln!(err, "Dropped refs/stash@{{0}} ({})", &oid.to_hex()[..7])?;
+    writeln!(err, "Dropped refs/stash@{{0}} ({})", oid.to_hex())?;
     Ok(0)
 }
 

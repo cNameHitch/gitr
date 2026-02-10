@@ -211,7 +211,7 @@ fn shortlog_groups_by_author() {
     let dir = tempfile::tempdir().unwrap();
     setup_history_repo(dir.path());
 
-    let result = gitr(dir.path(), &["shortlog"]);
+    let result = gitr(dir.path(), &["shortlog", "HEAD"]);
     assert_eq!(result.exit_code, 0);
     assert!(result.stdout.contains("Test Author"), "should show author name");
     assert!(result.stdout.contains("(3)"), "should show commit count");
@@ -222,7 +222,7 @@ fn shortlog_summary() {
     let dir = tempfile::tempdir().unwrap();
     setup_history_repo(dir.path());
 
-    let result = gitr(dir.path(), &["shortlog", "-s"]);
+    let result = gitr(dir.path(), &["shortlog", "-s", "HEAD"]);
     assert_eq!(result.exit_code, 0);
     assert!(result.stdout.contains("3"), "summary should show count");
     assert!(result.stdout.contains("Test Author"), "summary should show author");

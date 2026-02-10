@@ -10,23 +10,23 @@ use git_index::IgnoreStack;
 use crate::Cli;
 use super::open_repo;
 
-#[derive(Args)]
+#[derive(Args, Default)]
 pub struct StatusArgs {
     /// Give the output in the short-format
     #[arg(short, long)]
-    short: bool,
+    pub short: bool,
 
     /// Show the branch and tracking info in short-format
     #[arg(short, long)]
-    branch: bool,
+    pub branch: bool,
 
     /// Give the output in machine-readable format
     #[arg(long)]
-    porcelain: bool,
+    pub porcelain: bool,
 
     /// Show the output in the long-format (default)
     #[arg(long)]
-    long: bool,
+    pub long: bool,
 }
 
 pub fn run(args: &StatusArgs, cli: &Cli) -> Result<i32> {
@@ -39,7 +39,10 @@ pub fn run(args: &StatusArgs, cli: &Cli) -> Result<i32> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
-    let options = DiffOptions::default();
+    let options = DiffOptions {
+        detect_renames: true,
+        ..DiffOptions::default()
+    };
 
     if args.short || args.porcelain {
         print_short_status(&mut repo, &work_tree, &options, args, &mut out)?;
@@ -48,6 +51,21 @@ pub fn run(args: &StatusArgs, cli: &Cli) -> Result<i32> {
     }
 
     Ok(0)
+}
+
+/// Print status output (for use by other commands like stash pop).
+pub fn print_status(
+    repo: &mut git_repository::Repository,
+    work_tree: &Path,
+    options: &DiffOptions,
+    args: &StatusArgs,
+    out: &mut impl Write,
+) -> Result<()> {
+    if args.short || args.porcelain {
+        print_short_status(repo, work_tree, options, args, out)
+    } else {
+        print_long_status(repo, work_tree, options, args, out)
+    }
 }
 
 fn print_short_status(
@@ -71,13 +89,20 @@ fn print_short_status(
     // Unstaged changes (index vs worktree)
     let unstaged = git_diff::worktree::diff_index_to_worktree(repo, options)?;
 
-    // Build a combined status map
+    // Build a combined status map and track renames
     let mut status_map: std::collections::BTreeMap<BString, (char, char)> =
         std::collections::BTreeMap::new();
+    let mut rename_map: std::collections::HashMap<BString, BString> =
+        std::collections::HashMap::new();
 
     for file in &staged.files {
         let path = file.path().clone();
         let code = file.status.as_char();
+        if file.status == FileStatus::Renamed {
+            if let Some(ref old) = file.old_path {
+                rename_map.insert(path.clone(), old.clone());
+            }
+        }
         status_map.entry(path).or_insert((' ', ' ')).0 = code;
     }
 
@@ -94,6 +119,13 @@ fn print_short_status(
     }
 
     for (path, (idx, wt)) in &status_map {
+        // For renames, show "R  old -> new" format
+        if *idx == 'R' {
+            if let Some(old_path) = rename_map.get(path) {
+                writeln!(out, "{}{} {} -> {}", idx, wt, old_path.to_str_lossy(), path.to_str_lossy())?;
+                continue;
+            }
+        }
         writeln!(out, "{}{} {}", idx, wt, path.to_str_lossy())?;
     }
 
@@ -128,13 +160,21 @@ fn print_long_status(
     }
 
     // Staged changes
+    let is_initial = repo.is_unborn()?;
     let staged = git_diff::worktree::diff_head_to_index(repo, options)?;
     if !staged.files.is_empty() {
         writeln!(out, "Changes to be committed:")?;
-        writeln!(
-            out,
-            "  (use \"git restore --staged <file>...\" to unstage)"
-        )?;
+        if is_initial {
+            writeln!(
+                out,
+                "  (use \"git rm --cached <file>...\" to unstage)"
+            )?;
+        } else {
+            writeln!(
+                out,
+                "  (use \"git restore --staged <file>...\" to unstage)"
+            )?;
+        }
         for file in &staged.files {
             let status_word = match file.status {
                 FileStatus::Added => "new file",
@@ -249,8 +289,12 @@ fn find_untracked_recursive(
     ignores: &IgnoreStack,
     result: &mut Vec<BString>,
 ) -> Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
+    let mut entries: Vec<_> = std::fs::read_dir(dir)?
+        .filter_map(|e| e.ok())
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+
+    for entry in entries {
         let path = entry.path();
 
         if path.file_name().map(|n| n == ".git").unwrap_or(false) {
@@ -266,10 +310,53 @@ fn find_untracked_recursive(
         }
 
         if is_dir {
-            find_untracked_recursive(work_tree, &path, indexed, ignores, result)?;
+            // Check if all files in this dir are untracked — collapse to "dir/"
+            let has_tracked = has_tracked_files(work_tree, &path, indexed, ignores);
+            if !has_tracked {
+                let mut dir_entry = rel_bstr.clone();
+                dir_entry.extend_from_slice(b"/");
+                result.push(dir_entry);
+            } else {
+                find_untracked_recursive(work_tree, &path, indexed, ignores, result)?;
+            }
         } else if !indexed.contains(&rel_bstr) {
             result.push(rel_bstr);
         }
     }
     Ok(())
+}
+
+/// Check if a directory has any tracked files (files that exist in the index).
+fn has_tracked_files(
+    work_tree: &Path,
+    dir: &Path,
+    indexed: &std::collections::HashSet<BString>,
+    ignores: &IgnoreStack,
+) -> bool {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return false,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.file_name().map(|n| n == ".git").unwrap_or(false) {
+            continue;
+        }
+        let rel = path.strip_prefix(work_tree).unwrap_or(&path);
+        let rel_bstr = BString::from(rel.to_str().unwrap_or("").as_bytes());
+        let is_dir = path.is_dir();
+
+        if ignores.is_ignored(rel_bstr.as_ref(), is_dir) {
+            continue;
+        }
+
+        if is_dir {
+            if has_tracked_files(work_tree, &path, indexed, ignores) {
+                return true;
+            }
+        } else if indexed.contains(&rel_bstr) {
+            return true;
+        }
+    }
+    false
 }

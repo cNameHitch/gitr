@@ -132,10 +132,17 @@ pub fn run(args: &DescribeArgs, cli: &Cli) -> Result<i32> {
                 let hex = target_oid.to_hex();
                 let abbrev = &hex[..args.abbrev.min(hex.len())];
                 write!(out, "{}", abbrev)?;
+            } else if !args.tags && has_unannotated_tags(&repo)? {
+                // There are unannotated tags but --tags wasn't specified
+                let hex = target_oid.to_hex();
+                let abbrev = &hex[..args.abbrev.min(hex.len())];
+                anyhow::bail!(
+                    "No annotated tags can describe '{}'.\nHowever, there were unannotated tags: try --tags.",
+                    abbrev
+                );
             } else {
                 anyhow::bail!(
-                    "fatal: No names found, cannot describe anything.\n\
-                    Use --always to fall back to abbreviated commit OID."
+                    "No names found, cannot describe anything."
                 );
             }
         }
@@ -148,4 +155,21 @@ pub fn run(args: &DescribeArgs, cli: &Cli) -> Result<i32> {
 
     writeln!(out)?;
     Ok(0)
+}
+
+/// Check if the repository has any unannotated (lightweight) tags.
+fn has_unannotated_tags(repo: &git_repository::Repository) -> Result<bool> {
+    let tag_refs = repo.refs().iter(Some("refs/tags/"))?;
+    for r in tag_refs {
+        let r = r?;
+        if let Some(oid) = r.target_oid() {
+            let obj = repo.odb().read(&oid)?;
+            match obj {
+                Some(Object::Tag(_)) => {} // annotated tag, skip
+                Some(_) => return Ok(true), // lightweight tag
+                None => {}
+            }
+        }
+    }
+    Ok(false)
 }

@@ -5,6 +5,7 @@ pub mod nameonly;
 pub mod raw;
 pub mod stat;
 pub mod unified;
+pub mod word_diff;
 
 use crate::{DiffOptions, DiffOutputFormat, DiffResult};
 
@@ -19,5 +20,6 @@ pub fn format_diff(result: &DiffResult, options: &DiffOptions) -> String {
         DiffOutputFormat::NameOnly => nameonly::format_name_only(result),
         DiffOutputFormat::NameStatus => nameonly::format_name_status(result),
         DiffOutputFormat::Summary => nameonly::format_summary(result),
+        DiffOutputFormat::WordDiff => word_diff::format_word_diff(result),
     }
 }
