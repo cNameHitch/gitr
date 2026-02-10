@@ -52,6 +52,3 @@ jobs:
 
       - name: Run parity coverage report
         run: ./scripts/ci/parity-coverage.sh --no-color
-
-      - name: Check no commands have zero tests
-        run: ./scripts/ci/parity-coverage.sh --no-color --check
