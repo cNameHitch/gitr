@@ -84,6 +84,13 @@ pub fn run(args: &RevertArgs, cli: &Cli) -> Result<i32> {
 
     let options = MergeOptions::default();
 
+    // Save ORIG_HEAD once before the entire sequence
+    let head_oid = repo
+        .head_oid()?
+        .ok_or_else(|| anyhow::anyhow!("HEAD not set"))?;
+    let git_dir = repo.git_dir().to_path_buf();
+    fs::write(git_dir.join("ORIG_HEAD"), head_oid.to_hex())?;
+
     for rev in &args.commits {
         let commit_oid = git_revwalk::resolve_revision(&repo, rev)?;
         let result = revert_one(&mut repo, &commit_oid, &options, args.no_commit, &mut out, &mut err)?;
@@ -91,6 +98,9 @@ pub fn run(args: &RevertArgs, cli: &Cli) -> Result<i32> {
             return Ok(result);
         }
     }
+
+    // Clean up ORIG_HEAD on success
+    let _ = fs::remove_file(git_dir.join("ORIG_HEAD"));
 
     Ok(0)
 }
@@ -117,9 +127,6 @@ fn revert_one(
     let head_oid = repo
         .head_oid()?
         .ok_or_else(|| anyhow::anyhow!("HEAD not set"))?;
-
-    // Save ORIG_HEAD for abort
-    fs::write(git_dir.join("ORIG_HEAD"), head_oid.to_hex())?;
 
     // Perform the revert
     let result = git_merge::revert::revert(repo, commit_oid, options)?;
@@ -181,7 +188,6 @@ fn revert_one(
 
         // Clean up state
         let _ = fs::remove_file(git_dir.join("REVERT_HEAD"));
-        let _ = fs::remove_file(git_dir.join("ORIG_HEAD"));
     } else {
         // Conflict
         fs::write(git_dir.join("REVERT_HEAD"), commit_oid.to_hex())?;
@@ -226,9 +232,17 @@ fn handle_abort(
 
     update_head_to(repo, &orig_oid)?;
 
-    if let Some(work_tree) = repo.work_tree().map(|p| p.to_path_buf()) {
-        let obj = repo.odb().read(&orig_oid)?;
-        if let Some(Object::Commit(c)) = obj {
+    // Rebuild the index and working tree from the original commit's tree
+    let obj = repo.odb().read(&orig_oid)?;
+    if let Some(Object::Commit(c)) = obj {
+        // Rebuild index from tree
+        let index_path = git_dir.join("index");
+        let mut new_index = git_index::Index::new();
+        super::reset::build_index_from_tree(repo.odb(), &c.tree, &bstr::BString::from(""), &mut new_index)?;
+        new_index.write_to(&index_path)?;
+
+        // Checkout working tree
+        if let Some(work_tree) = repo.work_tree().map(|p| p.to_path_buf()) {
             super::reset::checkout_tree_to_worktree(repo.odb(), &c.tree, &work_tree)?;
         }
     }
@@ -237,6 +251,11 @@ fn handle_abort(
     let _ = fs::remove_file(git_dir.join("REVERT_HEAD"));
     let _ = fs::remove_file(git_dir.join("ORIG_HEAD"));
     let _ = fs::remove_file(git_dir.join("MERGE_MSG"));
+    // Clean up sequencer state
+    let sequencer_dir = git_dir.join("sequencer");
+    if sequencer_dir.exists() {
+        let _ = fs::remove_dir_all(&sequencer_dir);
+    }
 
     Ok(0)
 }

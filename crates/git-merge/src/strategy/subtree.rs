@@ -16,7 +16,9 @@ use crate::strategy::MergeStrategy;
 use crate::{MergeError, MergeOptions, MergeResult};
 
 /// Minimum match score for automatic subtree detection.
-const AUTO_DETECT_THRESHOLD: f64 = 0.5;
+/// Set low to match git's permissive behavior — even a single overlapping
+/// entry name is enough when there's a clear best-matching subdirectory.
+const AUTO_DETECT_THRESHOLD: f64 = 0.01;
 
 /// The subtree merge strategy.
 ///

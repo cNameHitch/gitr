@@ -96,6 +96,13 @@ pub fn run(args: &CherryPickArgs, cli: &Cli) -> Result<i32> {
 
     let options = MergeOptions::default();
 
+    // Save ORIG_HEAD once before the entire sequence, not per-commit
+    let head_oid = repo
+        .head_oid()?
+        .ok_or_else(|| anyhow::anyhow!("HEAD not set"))?;
+    let git_dir = repo.git_dir().to_path_buf();
+    fs::write(git_dir.join("ORIG_HEAD"), head_oid.to_hex())?;
+
     for rev in &args.commits {
         let commit_oid = git_revwalk::resolve_revision(&repo, rev)?;
         let result = cherry_pick_one(&mut repo, &commit_oid, &options, args.no_commit, &mut out, &mut err)?;
@@ -103,6 +110,9 @@ pub fn run(args: &CherryPickArgs, cli: &Cli) -> Result<i32> {
             return Ok(result);
         }
     }
+
+    // Clean up ORIG_HEAD on success (no conflict)
+    let _ = fs::remove_file(git_dir.join("ORIG_HEAD"));
 
     Ok(0)
 }
@@ -135,9 +145,6 @@ fn cherry_pick_one(
     let head_oid = repo
         .head_oid()?
         .ok_or_else(|| anyhow::anyhow!("HEAD not set"))?;
-
-    // Save ORIG_HEAD for abort
-    fs::write(git_dir.join("ORIG_HEAD"), head_oid.to_hex())?;
 
     // Perform the cherry-pick merge
     let result = git_merge::cherry_pick::cherry_pick(repo, commit_oid, options)?;
@@ -208,7 +215,6 @@ fn cherry_pick_one(
 
         // Clean up state
         let _ = fs::remove_file(git_dir.join("CHERRY_PICK_HEAD"));
-        let _ = fs::remove_file(git_dir.join("ORIG_HEAD"));
     } else {
         // Conflict
         fs::write(git_dir.join("CHERRY_PICK_HEAD"), commit_oid.to_hex())?;
@@ -250,20 +256,121 @@ fn handle_abort(
 
     update_head_to(repo, &orig_oid)?;
 
-    // Checkout the original tree
-    if let Some(work_tree) = repo.work_tree().map(|p| p.to_path_buf()) {
-        let obj = repo.odb().read(&orig_oid)?;
-        if let Some(Object::Commit(c)) = obj {
+    // Rebuild the index and working tree from the original commit's tree
+    let obj = repo.odb().read(&orig_oid)?;
+    if let Some(Object::Commit(c)) = obj {
+        // Rebuild index from tree
+        let index_path = git_dir.join("index");
+        let mut new_index = git_index::Index::new();
+        super::reset::build_index_from_tree(repo.odb(), &c.tree, &BString::from(""), &mut new_index)?;
+        new_index.write_to(&index_path)?;
+
+        // Checkout working tree (removes stale files since index is rebuilt)
+        if let Some(work_tree) = repo.work_tree().map(|p| p.to_path_buf()) {
+            // Collect files currently in worktree that shouldn't be there
+            let old_index_path = git_dir.join("index");
+            if old_index_path.exists() {
+                // Remove files added by the cherry-pick that aren't in the original tree
+                remove_extra_worktree_files(repo.odb(), &c.tree, &work_tree)?;
+            }
             super::reset::checkout_tree_to_worktree(repo.odb(), &c.tree, &work_tree)?;
         }
     }
 
-    // Clean up
+    // Clean up all cherry-pick state
     let _ = fs::remove_file(git_dir.join("CHERRY_PICK_HEAD"));
     let _ = fs::remove_file(git_dir.join("ORIG_HEAD"));
     let _ = fs::remove_file(git_dir.join("MERGE_MSG"));
+    // Clean up sequencer state
+    let sequencer_dir = git_dir.join("sequencer");
+    if sequencer_dir.exists() {
+        let _ = fs::remove_dir_all(&sequencer_dir);
+    }
 
     Ok(0)
+}
+
+/// Remove files from the working tree that are NOT in the target tree.
+/// This ensures files added by a cherry-pick are cleaned up on abort.
+fn remove_extra_worktree_files(
+    odb: &git_odb::ObjectDatabase,
+    tree_oid: &ObjectId,
+    work_tree: &std::path::Path,
+) -> Result<()> {
+    // Collect all file paths in the target tree
+    let target_files = collect_tree_paths(odb, tree_oid, "")?;
+
+    // Walk the working tree and remove files not in the target tree
+    remove_extra_files_recursive(work_tree, work_tree, &target_files)?;
+    Ok(())
+}
+
+fn collect_tree_paths(
+    odb: &git_odb::ObjectDatabase,
+    tree_oid: &ObjectId,
+    prefix: &str,
+) -> Result<std::collections::HashSet<String>> {
+    let mut paths = std::collections::HashSet::new();
+    let obj = odb.read(tree_oid)?;
+    let tree = match obj {
+        Some(Object::Tree(t)) => t,
+        _ => return Ok(paths),
+    };
+
+    for entry in &tree.entries {
+        let name = String::from_utf8_lossy(&entry.name);
+        let path = if prefix.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}/{}", prefix, name)
+        };
+
+        if entry.mode.is_tree() {
+            let sub = collect_tree_paths(odb, &entry.oid, &path)?;
+            paths.extend(sub);
+        } else {
+            paths.insert(path);
+        }
+    }
+    Ok(paths)
+}
+
+fn remove_extra_files_recursive(
+    base: &std::path::Path,
+    dir: &std::path::Path,
+    target_files: &std::collections::HashSet<String>,
+) -> Result<()> {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        let name = path.file_name().unwrap_or_default().to_str().unwrap_or("");
+
+        // Skip .git directory
+        if name == ".git" {
+            continue;
+        }
+
+        if path.is_dir() {
+            remove_extra_files_recursive(base, &path, target_files)?;
+            // Remove empty directories
+            if fs::read_dir(&path).map(|mut d| d.next().is_none()).unwrap_or(false) {
+                let _ = fs::remove_dir(&path);
+            }
+        } else {
+            let rel = path.strip_prefix(base)
+                .map(|p| p.to_str().unwrap_or("").to_string())
+                .unwrap_or_default();
+            if !target_files.contains(&rel) {
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn handle_continue(

@@ -205,7 +205,7 @@ pub fn run(args: &PullArgs, cli: &Cli) -> Result<i32> {
         signoff: false,
         verify: false,
         no_verify: false,
-        commit: Some(merge_branch),
+        commit: vec![merge_branch],
     };
 
     merge::run(&merge_args, cli)
