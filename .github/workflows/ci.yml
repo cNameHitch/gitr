@@ -6,6 +6,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Pin git version for deterministic parity test results.
+  # Update this when upgrading the reference git version.
+  GIT_VERSION: "2.43.0"
 
 jobs:
   test:
@@ -16,6 +19,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+
+      - name: Pin git version
+        run: |
+          sudo add-apt-repository -y ppa:git-core/ppa
+          sudo apt-get update
+          sudo apt-get install -y git
+          git --version
 
       - name: Run tests
         run: cargo test --workspace
@@ -33,3 +43,12 @@ jobs:
 
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+  parity-coverage:
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run parity coverage report
+        run: ./scripts/ci/parity-coverage.sh --no-color
