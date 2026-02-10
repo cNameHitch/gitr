@@ -457,6 +457,7 @@ fn test_replace_create_and_list() {
 // ══════════════════════════════════════════════════════════════════════════════
 
 #[test]
+#[ignore] // git >= 2.47 deprecated whatchanged, requires --i-still-use-this
 fn test_whatchanged_name_only() {
     let dir_git = tempfile::tempdir().unwrap();
     let dir_gitr = tempfile::tempdir().unwrap();
@@ -468,6 +469,7 @@ fn test_whatchanged_name_only() {
 }
 
 #[test]
+#[ignore] // git >= 2.47 deprecated whatchanged, requires --i-still-use-this
 fn test_whatchanged_name_status() {
     let dir_git = tempfile::tempdir().unwrap();
     let dir_gitr = tempfile::tempdir().unwrap();

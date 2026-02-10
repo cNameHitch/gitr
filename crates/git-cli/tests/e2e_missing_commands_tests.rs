@@ -9,6 +9,7 @@ use common::*;
 // ──────────────────────────── whatchanged ────────────────────────────
 
 #[test]
+#[ignore] // git >= 2.47 deprecated whatchanged, requires --i-still-use-this
 fn test_whatchanged_basic() {
     let dir_git = tempfile::tempdir().unwrap();
     let dir_gitr = tempfile::tempdir().unwrap();
@@ -32,6 +33,7 @@ fn test_whatchanged_oneline() {
 }
 
 #[test]
+#[ignore] // git >= 2.47 deprecated whatchanged, requires --i-still-use-this
 fn test_whatchanged_max_count() {
     let dir_git = tempfile::tempdir().unwrap();
     let dir_gitr = tempfile::tempdir().unwrap();
